@@ -12,11 +12,16 @@ library(umap)
 library(Seurat)
 library(loomR)
 library(zeallot)
+library(tidyverse)
+library(reticulate)
+library(viridis)
+use_python("/home/lambda/miniconda3/bin/python")
+py_config()
 ```
 
 ```{r}
 c(spliced, unspliced, ambiguous) %<-%
-  read.loom.matrices("./possorted_genome_bam_PP9W0.loom")
+  read.loom.matrices("/home/jgehring/scRNAseq/clytia/20180806/clytia_big_cDNAs_all_transcripts_forced/possorted_genome_bam_PP9W0.loom")
 ```
 That creates a list of sparse matrices of spliced, unspliced, and ambiguous counts.
 ```{r}
@@ -26,8 +31,54 @@ clytia <- CreateSeuratObject(spliced) %>%
   ScaleData(num.cores = 4) %>% 
   FindVariableGenes()
 ```
+```{r}
+VlnPlot(clytia, c("nGene", "nUMI"), group.by = "orig.ident")
+```
+```{r}
+summary(clytia@meta.data$nGene)
+```
 
 ```{r}
+clytia <- clytia %>% 
+  RunPCA(pcs.compute = 75, do.print = FALSE)
+PCElbowPlot(clytia, num.pc = 75)
+```
+```{r}
+# Clustering
+clytia <- clytia %>% 
+  FindClusters(genes.use = clytia@var.genes, dims.use = 1:50)
+```
+
+```{r}
+PCAPlot(clytia, pt.size = 0.5)
+```
+
+```{r}
+clytia <- clytia %>% 
+  RunTSNE(dims.use = 1:50)
+TSNEPlot(clytia, pt.size = 0.5)
+```
+
+```{r}
+clytia_umap <- umap(clytia@dr$pca@cell.embeddings[,1:50])
+```
+
+```{r}
+colnames(clytia_umap$layout) <- as.character(c(1,2))
+clytia <- SetDimReduction(clytia, reduction.type = "umap", slot = "cell.embeddings", new.data = clytia_umap$layout)
+clytia <- SetDimReduction(clytia, reduction.type = "umap", slot = "key", new.data = "umap")
+```
+
+```{r}
+DimPlot(clytia, reduction.use = "umap", pt.size = 0.5)
+```
+
+```{r}
+FeaturePlot(clytia, "nGene", cols.use = viridis(256), pt.size = 0.5, reduction.use = "umap")
+```
+
+```{r}
+# Do RNA velocity
 
 ```
 
