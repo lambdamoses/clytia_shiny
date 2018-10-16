@@ -1,0 +1,33 @@
+---
+title: "Exploring RNA velocity"
+author: "Lambda Moses"
+date: "10/15/2018"
+output: html_document
+---
+
+Here I play around with velocyto on Jase's dataset
+```{r}
+library(velocyto.R)
+library(umap)
+library(Seurat)
+library(loomR)
+library(zeallot)
+```
+
+```{r}
+c(spliced, unspliced, ambiguous) %<-%
+  read.loom.matrices("./possorted_genome_bam_PP9W0.loom")
+```
+That creates a list of sparse matrices of spliced, unspliced, and ambiguous counts.
+```{r}
+# Get the PCA, TSNE, UMAP stuff
+clytia <- CreateSeuratObject(spliced) %>% 
+  NormalizeData() %>% 
+  ScaleData(num.cores = 4) %>% 
+  FindVariableGenes()
+```
+
+```{r}
+
+```
+
