@@ -6,7 +6,7 @@ output: html_document
 ---
 
 Here I play around with velocyto on Jase's dataset
-```{r}
+```{r, message = FALSE}
 library(velocyto.R)
 library(umap)
 library(Seurat)
@@ -26,16 +26,13 @@ c(spliced, unspliced, ambiguous) %<-%
 That creates a list of sparse matrices of spliced, unspliced, and ambiguous counts.
 ```{r}
 # Get the PCA, TSNE, UMAP stuff
-clytia <- CreateSeuratObject(spliced) %>% 
+clytia <- CreateSeuratObject(spliced, min.cells = 3, min.genes = 1) %>% 
   NormalizeData() %>% 
   ScaleData(num.cores = 4) %>% 
-  FindVariableGenes()
+  FindVariableGenes(y.cutoff = 0.5)
 ```
 ```{r}
 VlnPlot(clytia, c("nGene", "nUMI"), group.by = "orig.ident")
-```
-```{r}
-summary(clytia@meta.data$nGene)
 ```
 
 ```{r}
@@ -46,7 +43,7 @@ PCElbowPlot(clytia, num.pc = 75)
 ```{r}
 # Clustering
 clytia <- clytia %>% 
-  FindClusters(genes.use = clytia@var.genes, dims.use = 1:50)
+  FindClusters(genes.use = clytia@var.genes, dims.use = 1:60)
 ```
 
 ```{r}
@@ -55,12 +52,12 @@ PCAPlot(clytia, pt.size = 0.5)
 
 ```{r}
 clytia <- clytia %>% 
-  RunTSNE(dims.use = 1:50)
+  RunTSNE(dims.use = 1:60)
 TSNEPlot(clytia, pt.size = 0.5)
 ```
 
 ```{r}
-clytia_umap <- umap(clytia@dr$pca@cell.embeddings[,1:50])
+clytia_umap <- umap(clytia@dr$pca@cell.embeddings[,1:20])
 ```
 
 ```{r}
@@ -79,6 +76,65 @@ FeaturePlot(clytia, "nGene", cols.use = viridis(256), pt.size = 0.5, reduction.u
 
 ```{r}
 # Do RNA velocity
+cell_dist <- as.dist(1 - armaCor(t(clytia@dr$pca@cell.embeddings), nthreads = 20))
+```
 
+```{r}
+clytia_vel <- gene.relative.velocity.estimates(spliced, unspliced, cell.dist = cell_dist)
+```
+```{r}
+show1 <- show.velocity.on.embedding.cor(emb = clytia@dr$tsne@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cc = show1$cc)
+```
+
+```{r}
+show.velocity.on.embedding.cor(emb = clytia@dr$pca@cell.embeddings[,1:2], vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cc = show1$cc)
+```
+
+That's an interesting pattern.
+```{r}
+show.velocity.on.embedding.cor(emb = clytia@dr$umap@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cc = show1$cc)
+```
+
+```{r}
+show.velocity.on.embedding.eu(emb = clytia@dr$tsne@cell.embeddings, vel = clytia_vel, arrow.scale = 3, show.cell.trajectories = TRUE, nPcs = 50)
+```
+
+```{r}
+clytia_loom <- Convert(from = clytia, to = "loom", file = "clytia.loom")
+```
+```{r}
+# Store the metadata in a way that is more convenient for plotting
+clytia_cell_attrs <- tibble(nGene = clytia_loom[["col_attrs/nGene"]][],
+                            nUMI = clytia_loom[["col_attrs/nUMI"]][],
+                            cluster = clytia_loom[["col_attrs/res.0.8"]][])
+clytia_cell_attrs <- do.call(cbind, 
+                      list(clytia_cell_attrs,
+          setNames(as.tibble(t(clytia_loom[["col_attrs/pca_cell_embeddings"]][,])), 
+                   paste0("PCA", 1:75)),
+          setNames(as.tibble(t(clytia_loom[["col_attrs/tsne_cell_embeddings"]][,])),
+                   paste0("tSNE", 1:2)),
+          setNames(as.tibble(t(clytia_loom[["col_attrs/umap_cell_embeddings"]][,])),
+                   paste0("UMAP", 1:2))))
+```
+```{r}
+clytia_loom[["row_attrs"]]
+```
+
+```{r}
+# Store gene names as a separate vector to avoid repeated query into loom
+# Make it easy to index matrix by gene
+clytia_gene_names <- clytia_loom[["row_attrs/gene_names"]][]
+```
+
+```{r}
+# Save results
+saveRDS(clytia_vel, file = "clytia_velocity.Rds")
+saveRDS(show1, file = "clytia_show.Rds")
+saveRDS(clytia_cell_attrs, file = "clytia_cell_attrs.Rds")
+saveRDS(clytia_gene_names, file = "clytia_gene_names.Rds")
+```
+
+```{r}
+clytia_loom$close_all()
 ```
 
