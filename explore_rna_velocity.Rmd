@@ -15,6 +15,7 @@ library(zeallot)
 library(tidyverse)
 library(reticulate)
 library(viridis)
+library(scales)
 use_python("/home/lambda/miniconda3/bin/python")
 py_config()
 ```
@@ -82,15 +83,25 @@ cell_dist <- as.dist(1 - armaCor(t(clytia@dr$pca@cell.embeddings), nthreads = 20
 ```{r}
 clytia_vel <- gene.relative.velocity.estimates(spliced, unspliced, cell.dist = cell_dist)
 ```
+
 ```{r}
-show1 <- show.velocity.on.embedding.cor(emb = clytia@dr$tsne@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cc = show1$cc)
+cluster_colors <- tibble(res.0.8 = as.character(0:15),
+                         color = hue_pal()(16))
+clytia@meta.data <- clytia@meta.data %>% 
+  left_join(cluster_colors, by = "res.0.8")
+colors_use <- setNames(ac(clytia@meta.data$color, alpha = 0.5),
+                       colnames(clytia@scale.data))
 ```
 
 ```{r}
-show.velocity.on.embedding.cor(emb = clytia@dr$pca@cell.embeddings[,1:2], vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cc = show1$cc)
+show1 <- show.velocity.on.embedding.cor(emb = clytia@dr$tsne@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cell.colors = colors_use, cc = show1$cc)
 ```
 
-That's an interesting pattern.
+```{r}
+show.velocity.on.embedding.cor(emb = clytia@dr$pca@cell.embeddings[,1:2], vel = clytia_vel, cell.colors = colors_use, show.grid.flow = TRUE, arrow.scale = 2, grid.n = 40, cc = show1$cc)
+```
+
+That's an interesting pattern. The annoying part is that the velocyto package doesn't let us change the point character. Because of the black outline of the points, if I make the points smaller, they will look dark. Since velocyto doesn't let me change the color of arrows, I can't do a dark theme, since that will make it hard to see the arrows.
 ```{r}
 show.velocity.on.embedding.cor(emb = clytia@dr$umap@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cc = show1$cc)
 ```
@@ -102,11 +113,14 @@ show.velocity.on.embedding.eu(emb = clytia@dr$tsne@cell.embeddings, vel = clytia
 ```{r}
 clytia_loom <- Convert(from = clytia, to = "loom", file = "clytia.loom")
 ```
+
 ```{r}
 # Store the metadata in a way that is more convenient for plotting
-clytia_cell_attrs <- tibble(nGene = clytia_loom[["col_attrs/nGene"]][],
+clytia_cell_attrs <- tibble(cell_names = clytia_loom[["col_attrs/cell_names"]][], 
+                            nGene = clytia_loom[["col_attrs/nGene"]][],
                             nUMI = clytia_loom[["col_attrs/nUMI"]][],
-                            cluster = clytia_loom[["col_attrs/res.0.8"]][])
+                            cluster = clytia_loom[["col_attrs/res.0.8"]][],
+                            cluster_colors = clytia@meta.data$color)
 clytia_cell_attrs <- do.call(cbind, 
                       list(clytia_cell_attrs,
           setNames(as.tibble(t(clytia_loom[["col_attrs/pca_cell_embeddings"]][,])), 
