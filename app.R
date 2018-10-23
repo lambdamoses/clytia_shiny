@@ -1,16 +1,17 @@
 library(shiny)
-library(tidyverse)
+library(ggplot2)
+library(tibble)
+library(dplyr)
 library(loomR)
 library(plotly)
 library(shinythemes)
 library(scales)
-library(ggplotify)
 library(velocyto.R)
 
 cell_attrs <- readRDS("clytia_cell_attrs.Rds")
 gene_names <- readRDS("clytia_gene_names.Rds")
 clytia_loom <- connect("clytia.loom")
-
+theme_set(theme_bw())
 # Set cell colors for velocyto plot
 velo_set_colors <- function(mode = "discrete", vec, alpha) {
   switch(mode,
@@ -37,6 +38,19 @@ ui <- fluidPage(
    # Sidebar with a slider input for number of bins 
    sidebarLayout(
       sidebarPanel(
+        tags$head(tags$script('
+                                var dimension = [0, 0];
+                              $(document).on("shiny:connected", function(e) {
+                              dimension[0] = window.innerWidth;
+                              dimension[1] = window.innerHeight;
+                              Shiny.onInputChange("dimension", dimension);
+                              });
+                              $(window).resize(function(e) {
+                              dimension[0] = window.innerWidth;
+                              dimension[1] = window.innerHeight;
+                              Shiny.onInputChange("dimension", dimension);
+                              });
+                              ')),
          radioButtons("dim_reduction", "Dimension reduction",
                       choices = c("PCA", "tSNE", "UMAP")),
          fluidRow(
@@ -48,7 +62,7 @@ ui <- fluidPage(
          # options depend on what to use to color
          uiOutput("cont_params", inline = TRUE),
          radioButtons("theme", "Plot theme", choices = c("light", "dark")),
-         helpText("Plotting RNA velocity may take a while"),
+         helpText("Plotting RNA velocity may take a while (about 1 minute)"),
          checkboxInput("velo", "Plot RNA velocity"),
          uiOutput("velo_params"),
          checkboxInput("interactive", "Interactive plot", value = FALSE),
@@ -190,10 +204,7 @@ server <- function(input, output) {
             scale_color_viridis_c()
         }
       }
-      if (input$theme == "light") {
-        p <- p +
-          theme_bw()
-      } else {
+      if (input$theme == "dark") {
         p <- p + theme_dark()
       }
       p
@@ -204,10 +215,10 @@ server <- function(input, output) {
       if (if_velo()) {
         textOutput("text_out")
       } else {
-        plotlyOutput("Plotly_out")
+        plotlyOutput("Plotly_out", height = input$dimension[1] / 2)
       }
     } else {
-      plotOutput("Plot_out")
+      plotOutput("Plot_out", height = input$dimension[1] / 2)
     }
   })
   output$text_out <- renderText("Interactive mode is not available for RNA velocity plot yet.
