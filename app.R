@@ -54,7 +54,7 @@ ui <- fluidPage(
          checkboxInput("interactive", "Interactive plot", value = FALSE),
          actionButton("submit", "Make plot"),
          helpText("Save plot only works for static plots"),
-         checkboxInput("save_plot", "Save plot",
+         checkboxInput("save_plot", "Save plot?",
                        value = FALSE),
          conditionalPanel(condition = "input.save_plot == true && input.interactive == false",
                           selectInput("fig_unit", "Plot size unit",
@@ -113,7 +113,7 @@ server <- function(input, output) {
   if_velo <- eventReactive(input$submit, input$velo)
   # Load data required for velocyto plot only when velo is TRUE
   observeEvent(input$submit, {
-    if (if_velo() && !exists("show1") && !exists("velo")) {
+    if (if_velo() && !exists("show1") && !exists("velo") && !if_interactive()) {
       showNotification("Loading RNA velocity results")
       show1 <<- readRDS("clytia_show.Rds")
       velo <<- readRDS("clytia_velocity.Rds")
@@ -149,7 +149,8 @@ server <- function(input, output) {
       }
       if (input$color_by %in% c("cell_density", "none")) {
         if (input$color_by == "cell_density") {
-          showNotification("Can't color by cell density in RNA velocity plot")
+          showNotification("Can't color by cell density in RNA velocity plot",
+                           duration = NULL)
         }
         colors_use <- NULL
       } else if (input$color_by != "gene") {
@@ -160,6 +161,7 @@ server <- function(input, output) {
         col_vec <- clytia_loom[["matrix"]][,ind]
         colors_use <- velo_set_colors(col_mode, col_vec, input$alpha)
       }
+      showNotification("Computing arrows", duration = NULL)
       show.velocity.on.embedding.cor(emb = df(), 
                                      vel = velo, show.grid.flow = TRUE, 
                                      arrow.scale = 3, grid.n = 40, cc = show1$cc,
