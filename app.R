@@ -1,7 +1,5 @@
 library(shiny)
 library(ggplot2)
-library(tibble)
-library(dplyr)
 library(loomR)
 library(plotly)
 library(shinythemes)
@@ -134,6 +132,14 @@ server <- function(input, output) {
   # Get these plot settings: interactive, velocyto
   if_interactive <- eventReactive(input$submit, input$interactive)
   if_velo <- eventReactive(input$submit, input$velo)
+  # Get other plot settings
+  color_by <- eventReactive(input$submit, input$color_by)
+  pt_size <- eventReactive(input$submit, input$pt_size)
+  alpha <- eventReactive(input$submit, input$alpha)
+  gene <- eventReactive(input$submit, input$gene)
+  n_bins <- eventReactive(input$submit, input$n_bins)
+  theme_plt <- eventReactive(input$submit, input$theme)
+
   # Load data required for velocyto plot only when velo is TRUE
   observeEvent(input$submit, {
     if (if_velo() && !exists("show1") && !exists("velo") && !if_interactive()) {
@@ -160,6 +166,7 @@ server <- function(input, output) {
         # Truncate at 10
         gene_vals[gene_vals > 10] <- 10
         df[[input$gene]] <- gene_vals
+        df <- df[,c(1,2,4,3)]
       }
     }
     df
@@ -223,7 +230,8 @@ server <- function(input, output) {
       p
     }
   })
-  output$Plot <- renderUI({
+  
+  output$Plot <- renderUI({ 
     if (if_interactive()) {
       if (if_velo()) {
         textOutput("text_out")
@@ -236,7 +244,43 @@ server <- function(input, output) {
   })
   output$text_out <- renderText("Interactive mode is not available for RNA velocity plot yet.
                                 It will be available for the next release of velocyto.R.")
-  output$Plotly_out <- renderPlotly(toWebGL(ggplotly(g())))
+  output$Plotly_out <- renderPlotly({
+    # Using just plotly is faster than ggplotly
+    if (color_by() == "cell_density") {
+      nms <- names(df())
+      p <- plot_ly(x = df()[,1], y = df()[,2]) %>% 
+        add_histogram2d(nbinsx = n_bins(), nbinsy = n_bins()) %>% 
+        layout(xaxis = list(title = nms[1]), yaxis = list(title = nms[2]))
+    } else {
+      nms <- names(df())
+      p <- plot_ly(x = df()[,1], y = df()[,2], hoverinfo = "text",
+                   text = paste0(nms[1], ": ", round(df()[,1], 2), "\n",
+                                 nms[2], ": ", round(df()[,2],2), "\n",
+                                 "barcode: ", df()$barcode)) %>% 
+        layout(xaxis = list(title = nms[1], zeroline = FALSE), 
+               yaxis = list(title = nms[2], zeroline = FALSE))
+      if (color_by() == "none") {
+        p <- p %>% 
+          add_markers(type = "scattergl", opacity = alpha(), color = I("black"),
+                      marker = list(size = pt_size() * 3, sizemode = "diameter"))
+      } else if (color_by() == "cluster") {
+        p <- p %>% 
+          add_markers(type = "scattergl", opacity = alpha(), 
+                      color = df()[,3], colors = hue_pal()(20),
+                      marker = list(size = pt_size() * 3, sizemode = "diameter"))
+      } else {
+        p <- p %>% 
+          add_markers(type = "scattergl", opacity = alpha(), color = df()[,3],
+                      marker = list(size = pt_size() * 3, sizemode = "diameter"))
+      }
+    }
+    if (theme_plt() == "dark") {
+      p <- p %>% 
+        layout(plot_bgcolor = "#7F7F7F")
+    }
+    p
+  })
+  
   output$Plot_out <- renderPlot(g())
   # Default file name
   output$Save <- downloadHandler(filename = "plot", 
