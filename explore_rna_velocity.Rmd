@@ -151,7 +151,8 @@ clytia_loom <- Convert(from = clytia, to = "loom", file = "clytia.loom")
 ```{r}
 # Store the metadata in a way that is more convenient for plotting
 bc <- str_sub(colnames(clytia@scale.data), start = 28, end = 44)
-clytia_cell_attrs <- tibble(barcode = bc,
+clytia_cell_attrs <- tibble(cell_names = colnames(clytia@scale.data),
+                            barcode = bc,
                             nGene = clytia@meta.data$nGene,
                             nUMI = clytia@meta.data$nUMI,
                       cluster = as.factor(as.numeric(clytia@meta.data$res.1)),

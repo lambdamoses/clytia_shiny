@@ -28,11 +28,11 @@ velo_set_colors <- function(mode = "discrete", vec, alpha) {
   switch(mode,
          "discrete" = {
            setNames(ac(cell_attrs$cluster_colors, alpha = alpha), 
-                    cell_attrs$barcode)
+                    cell_attrs$cell_names)
          },
          "continuous" = {
            color_vec <- viridis_pal()(256)[as.numeric(cut(vec, 256))]
-           setNames(ac(color_vec, alpha = alpha), cell_attrs$barcode)
+           setNames(ac(color_vec, alpha = alpha), cell_attrs$cell_names)
          })
 }
 
@@ -145,7 +145,7 @@ server <- function(input, output) {
     names_get <- c(paste0(input$dim_reduction, c(input$dim_use_x, input$dim_use_y)))
     if (input$velo) {
       df <- as.matrix(cell_attrs[,names_get])
-      rownames(df) <- cell_attrs$barcode
+      rownames(df) <- cell_attrs$cell_names
     } else {
       if (!input$color_by %in% c("none", "cell_density", "gene")) {
         names_get <- c(names_get, input$color_by)
