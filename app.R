@@ -1,27 +1,35 @@
 library(shiny)
-library(tidyverse)
+library(ggplot2)
 library(loomR)
 library(plotly)
 library(shinythemes)
 library(scales)
-library(ggplotify)
 library(velocyto.R)
+# For async programming
+library(future)
+library(promises)
+# For loader for slow processes
+library(shinycssloaders)
+
+# To do:
+# Use plot caching
+# Use async programming
+# Speed up retrieval of scaled data
+# Use Plotly itself, rather than ggplotly, to make the interactive plot, 
+# see if it speeds things up
+# Display table showing marker genes for each cluster
+# It would be cool if I can let the users click on a gene to plot it
 
 cell_attrs <- readRDS("clytia_cell_attrs.Rds")
 gene_names <- readRDS("clytia_gene_names.Rds")
-clytia_loom <- connect("clytia.loom")
-
+clytia_loom <- connect("clytia_scaled.loom")
+theme_set(theme_bw())
 # Set cell colors for velocyto plot
 velo_set_colors <- function(mode = "discrete", vec, alpha) {
   switch(mode,
          "discrete" = {
-           vec <- as.numeric(vec)
-           color_map <- tibble(values = unique(vec)) %>% 
-             arrange(values) %>% 
-             mutate(color = hue_pal()(length(values)))
-           color_map2 <- tibble(values = vec) %>% 
-             left_join(color_map, by = "values")
-           setNames(ac(color_map2$color, alpha = alpha), cell_attrs$cell_names)
+           setNames(ac(cell_attrs$cluster_colors, alpha = alpha), 
+                    cell_attrs$cell_names)
          },
          "continuous" = {
            color_vec <- viridis_pal()(256)[as.numeric(cut(vec, 256))]
@@ -37,6 +45,19 @@ ui <- fluidPage(
    # Sidebar with a slider input for number of bins 
    sidebarLayout(
       sidebarPanel(
+        tags$head(tags$script('
+                                var dimension = [0, 0];
+                              $(document).on("shiny:connected", function(e) {
+                              dimension[0] = window.innerWidth;
+                              dimension[1] = window.innerHeight;
+                              Shiny.onInputChange("dimension", dimension);
+                              });
+                              $(window).resize(function(e) {
+                              dimension[0] = window.innerWidth;
+                              dimension[1] = window.innerHeight;
+                              Shiny.onInputChange("dimension", dimension);
+                              });
+                              ')),
          radioButtons("dim_reduction", "Dimension reduction",
                       choices = c("PCA", "tSNE", "UMAP")),
          fluidRow(
@@ -48,7 +69,7 @@ ui <- fluidPage(
          # options depend on what to use to color
          uiOutput("cont_params", inline = TRUE),
          radioButtons("theme", "Plot theme", choices = c("light", "dark")),
-         helpText("Plotting RNA velocity may take a while"),
+         helpText("Plotting RNA velocity may take a while (about 1 minute)"),
          checkboxInput("velo", "Plot RNA velocity"),
          uiOutput("velo_params"),
          checkboxInput("interactive", "Interactive plot", value = FALSE),
@@ -111,6 +132,14 @@ server <- function(input, output) {
   # Get these plot settings: interactive, velocyto
   if_interactive <- eventReactive(input$submit, input$interactive)
   if_velo <- eventReactive(input$submit, input$velo)
+  # Get other plot settings
+  color_by <- eventReactive(input$submit, input$color_by)
+  pt_size <- eventReactive(input$submit, input$pt_size)
+  alpha <- eventReactive(input$submit, input$alpha)
+  gene <- eventReactive(input$submit, input$gene)
+  n_bins <- eventReactive(input$submit, input$n_bins)
+  theme_plt <- eventReactive(input$submit, input$theme)
+
   # Load data required for velocyto plot only when velo is TRUE
   observeEvent(input$submit, {
     if (if_velo() && !exists("show1") && !exists("velo") && !if_interactive()) {
@@ -130,10 +159,14 @@ server <- function(input, output) {
       if (!input$color_by %in% c("none", "cell_density", "gene")) {
         names_get <- c(names_get, input$color_by)
       }
-      df <- cell_attrs[,names_get]
+      df <- cell_attrs[, c(names_get, "barcode")]
       if (input$color_by == "gene") {
         ind <- which(gene_names == input$gene)
-        df[[input$gene]] <- clytia_loom[["matrix"]][,ind]
+        gene_vals <- clytia_loom[["matrix"]][,ind]
+        # Truncate at 10
+        gene_vals[gene_vals > 10] <- 10
+        df[[input$gene]] <- gene_vals
+        df <- df[,c(1,2,4,3)]
       }
     }
     df
@@ -158,6 +191,7 @@ server <- function(input, output) {
         colors_use <- velo_set_colors(col_mode, col_vec, input$alpha)
       } else {
         ind <- which(gene_names == input$gene)
+        # Come back here if truncation is the culprit
         col_vec <- clytia_loom[["matrix"]][,ind]
         colors_use <- velo_set_colors(col_mode, col_vec, input$alpha)
       }
@@ -169,7 +203,7 @@ server <- function(input, output) {
                                      cex = input$pt_size)
     } else {
       dr_names <- paste0(input$dim_reduction, c(input$dim_use_x, input$dim_use_y))
-      p <- ggplot(df(), aes_string(dr_names[1], dr_names[2]))
+      p <- ggplot(df(), aes_string(dr_names[1], dr_names[2], label = "barcode"))
       if (input$color_by == "none") {
         p <- p +
           geom_point(size = input$pt_size, alpha = input$alpha)
@@ -190,29 +224,63 @@ server <- function(input, output) {
             scale_color_viridis_c()
         }
       }
-      if (input$theme == "light") {
-        p <- p +
-          theme_bw()
-      } else {
+      if (input$theme == "dark") {
         p <- p + theme_dark()
       }
       p
     }
   })
-  output$Plot <- renderUI({
+  
+  output$Plot <- renderUI({ 
     if (if_interactive()) {
       if (if_velo()) {
         textOutput("text_out")
       } else {
-        plotlyOutput("Plotly_out")
+        withSpinner(plotlyOutput("Plotly_out", height = input$dimension[1] / 2))
       }
     } else {
-      plotOutput("Plot_out")
+      withSpinner(plotOutput("Plot_out", height = input$dimension[1] / 2))
     }
   })
   output$text_out <- renderText("Interactive mode is not available for RNA velocity plot yet.
                                 It will be available for the next release of velocyto.R.")
-  output$Plotly_out <- renderPlotly(toWebGL(ggplotly(g())))
+  output$Plotly_out <- renderPlotly({
+    # Using just plotly is faster than ggplotly
+    if (color_by() == "cell_density") {
+      nms <- names(df())
+      p <- plot_ly(x = df()[,1], y = df()[,2]) %>% 
+        add_histogram2d(nbinsx = n_bins(), nbinsy = n_bins()) %>% 
+        layout(xaxis = list(title = nms[1]), yaxis = list(title = nms[2]))
+    } else {
+      nms <- names(df())
+      p <- plot_ly(x = df()[,1], y = df()[,2], hoverinfo = "text",
+                   text = paste0(nms[1], ": ", round(df()[,1], 2), "\n",
+                                 nms[2], ": ", round(df()[,2],2), "\n",
+                                 "barcode: ", df()$barcode)) %>% 
+        layout(xaxis = list(title = nms[1], zeroline = FALSE), 
+               yaxis = list(title = nms[2], zeroline = FALSE))
+      if (color_by() == "none") {
+        p <- p %>% 
+          add_markers(type = "scattergl", opacity = alpha(), color = I("black"),
+                      marker = list(size = pt_size() * 3, sizemode = "diameter"))
+      } else if (color_by() == "cluster") {
+        p <- p %>% 
+          add_markers(type = "scattergl", opacity = alpha(), 
+                      color = df()[,3], colors = hue_pal()(20),
+                      marker = list(size = pt_size() * 3, sizemode = "diameter"))
+      } else {
+        p <- p %>% 
+          add_markers(type = "scattergl", opacity = alpha(), color = df()[,3],
+                      marker = list(size = pt_size() * 3, sizemode = "diameter"))
+      }
+    }
+    if (theme_plt() == "dark") {
+      p <- p %>% 
+        layout(plot_bgcolor = "#7F7F7F")
+    }
+    p
+  })
+  
   output$Plot_out <- renderPlot(g())
   # Default file name
   output$Save <- downloadHandler(filename = "plot", 

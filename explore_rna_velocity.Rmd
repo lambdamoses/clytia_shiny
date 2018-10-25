@@ -13,11 +13,8 @@ library(Seurat)
 library(loomR)
 library(zeallot)
 library(tidyverse)
-library(reticulate)
 library(viridis)
 library(scales)
-use_python("/home/lambda/miniconda3/bin/python")
-py_config()
 ```
 
 ```{r}
@@ -25,17 +22,21 @@ c(spliced, unspliced, ambiguous) %<-%
   read.loom.matrices("/home/jgehring/scRNAseq/clytia/20180806/clytia_big_cDNAs_all_transcripts_forced/possorted_genome_bam_PP9W0.loom")
 ```
 That creates a list of sparse matrices of spliced, unspliced, and ambiguous counts.
+
 ```{r}
 # Get the PCA, TSNE, UMAP stuff
 clytia <- CreateSeuratObject(spliced, min.cells = 3, min.genes = 1) %>% 
   NormalizeData() %>% 
-  ScaleData(num.cores = 4) %>% 
-  FindVariableGenes(y.cutoff = 0.5)
+  ScaleData(num.cores = 10)
+clytia <- clytia %>% 
+  FindVariableGenes(y.cutoff = 0.475, x.low.cutoff = 0.0125)
 ```
+
 ```{r}
 VlnPlot(clytia, c("nGene", "nUMI"), group.by = "orig.ident")
 ```
 
+## Dimension reductions
 ```{r}
 clytia <- clytia %>% 
   RunPCA(pcs.compute = 75, do.print = FALSE)
@@ -44,7 +45,7 @@ PCElbowPlot(clytia, num.pc = 75)
 ```{r}
 # Clustering
 clytia <- clytia %>% 
-  FindClusters(genes.use = clytia@var.genes, dims.use = 1:60)
+  FindClusters(genes.use = clytia@var.genes, dims.use = 1:60, resolution = 1)
 ```
 
 ```{r}
@@ -58,23 +59,55 @@ TSNEPlot(clytia, pt.size = 0.5)
 ```
 
 ```{r}
-clytia_umap <- umap(clytia@dr$pca@cell.embeddings[,1:20])
+clytia_umap <- umap(clytia@dr$pca@cell.embeddings[,1:60], n_neighbors = 35, n_components = 2)
 ```
 
 ```{r}
-colnames(clytia_umap$layout) <- as.character(c(1,2))
+colnames(clytia_umap$layout) <- as.character(1:2)
 clytia <- SetDimReduction(clytia, reduction.type = "umap", slot = "cell.embeddings", new.data = clytia_umap$layout)
 clytia <- SetDimReduction(clytia, reduction.type = "umap", slot = "key", new.data = "umap")
 ```
 
 ```{r}
-DimPlot(clytia, reduction.use = "umap", pt.size = 0.5)
+DimPlot(clytia, reduction.use = "umap", pt.size = 0.5, dim.1 = 1, dim.2 = 2)
 ```
 
 ```{r}
-FeaturePlot(clytia, "nGene", cols.use = viridis(256), pt.size = 0.5, reduction.use = "umap")
+FeaturePlot(clytia, "XLOC_008048", cols.use = viridis(256), pt.size = 0.5, reduction.use = "tsne")
 ```
 
+## Marker genes for each cluster
+Now I'll find marker genes for each cluster, and see how they compare to those Jase found.
+```{r}
+clytia_markers <- FindAllMarkers(clytia, only.pos = TRUE)
+```
+
+```{r}
+clytia_markers %>% 
+  filter(p_val_adj < 0.05)
+```
+```{r}
+# Function to plot the top few marker genes in each cluster
+plot_top_markers <- function(cluster = 0, nCol = 2, nGenes = 6) {
+  cond <- clytia_markers$cluster == cluster & clytia_markers$p_val < 0.05
+  if (sum(cond) < nGenes) nGenes <- sum(cond)
+  FeaturePlot(clytia, clytia_markers[clytia_markers$cluster == cluster,
+                                     "gene"][1:nGenes],
+            cols.use = viridis(256), 
+            pt.size = 0.5, nCol = nCol, dark.theme = TRUE)
+}
+```
+
+Plot top markers for cluster 0, which seems pretty large and diffused
+```{r,fig.height=8, fig.width=6, fig.align='center'}
+for (i in 0:19) {
+  plot_top_markers(i)
+}
+```
+
+These are not always that specific.
+
+## RNA velocity
 ```{r}
 # Do RNA velocity
 cell_dist <- as.dist(1 - armaCor(t(clytia@dr$pca@cell.embeddings), nthreads = 20))
@@ -85,20 +118,20 @@ clytia_vel <- gene.relative.velocity.estimates(spliced, unspliced, cell.dist = c
 ```
 
 ```{r}
-cluster_colors <- tibble(res.0.8 = as.character(0:15),
-                         color = hue_pal()(16))
+cluster_colors <- tibble(res.1 = as.character(0:19),
+                         color = hue_pal()(20))
 clytia@meta.data <- clytia@meta.data %>% 
-  left_join(cluster_colors, by = "res.0.8")
+  left_join(cluster_colors, by = "res.1")
 colors_use <- setNames(ac(clytia@meta.data$color, alpha = 0.5),
                        colnames(clytia@scale.data))
 ```
 
 ```{r}
-show1 <- show.velocity.on.embedding.cor(emb = clytia@dr$tsne@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cell.colors = colors_use, cc = show1$cc)
+show1 <- show.velocity.on.embedding.cor(emb = clytia@dr$tsne@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cell.colors = colors_use)
 ```
 
 ```{r}
-show.velocity.on.embedding.cor(emb = clytia@dr$pca@cell.embeddings[,1:2], vel = clytia_vel, cell.colors = colors_use, show.grid.flow = TRUE, arrow.scale = 2, grid.n = 40, cc = show1$cc)
+show.velocity.on.embedding.cor(emb = clytia@dr$pca@cell.embeddings[,1:2], vel = clytia_vel, cell.colors = colors_use, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cc = show1$cc)
 ```
 
 That's an interesting pattern. The annoying part is that the velocyto package doesn't let us change the point character. Because of the black outline of the points, if I make the points smaller, they will look dark. Since velocyto doesn't let me change the color of arrows, I can't do a dark theme, since that will make it hard to see the arrows.
@@ -110,16 +143,19 @@ show.velocity.on.embedding.cor(emb = clytia@dr$umap@cell.embeddings, vel = clyti
 show.velocity.on.embedding.eu(emb = clytia@dr$tsne@cell.embeddings, vel = clytia_vel, arrow.scale = 3, show.cell.trajectories = TRUE, nPcs = 50)
 ```
 
+## Save results
 ```{r}
 clytia_loom <- Convert(from = clytia, to = "loom", file = "clytia.loom")
 ```
 
 ```{r}
 # Store the metadata in a way that is more convenient for plotting
-clytia_cell_attrs <- tibble(cell_names = clytia_loom[["col_attrs/cell_names"]][], 
-                            nGene = clytia_loom[["col_attrs/nGene"]][],
-                            nUMI = clytia_loom[["col_attrs/nUMI"]][],
-                            cluster = clytia_loom[["col_attrs/res.0.8"]][],
+bc <- str_sub(colnames(clytia@scale.data), start = 28, end = 44)
+clytia_cell_attrs <- tibble(cell_names = colnames(clytia@scale.data),
+                            barcode = bc,
+                            nGene = clytia@meta.data$nGene,
+                            nUMI = clytia@meta.data$nUMI,
+                      cluster = as.factor(as.numeric(clytia@meta.data$res.1)),
                             cluster_colors = clytia@meta.data$color)
 clytia_cell_attrs <- do.call(cbind, 
                       list(clytia_cell_attrs,
@@ -146,9 +182,14 @@ saveRDS(clytia_vel, file = "clytia_velocity.Rds")
 saveRDS(show1, file = "clytia_show.Rds")
 saveRDS(clytia_cell_attrs, file = "clytia_cell_attrs.Rds")
 saveRDS(clytia_gene_names, file = "clytia_gene_names.Rds")
+write_csv(clytia_markers, "clytia_cluster_markers.csv")
 ```
 
 ```{r}
 clytia_loom$close_all()
+```
+
+```{r}
+clytia_scaled <- create("clytia_scaled.loom", data = clytia@scale.data)
 ```
 
