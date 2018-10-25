@@ -153,7 +153,7 @@ server <- function(input, output) {
       df <- cell_attrs[, c(names_get, "barcode")]
       if (input$color_by == "gene") {
         ind <- which(gene_names == input$gene)
-        gene_vals <- clytia_loom[["matrix"]][,ind]
+        gene_vals <- clytia_loom[["layers/scale_data"]][,ind]
         # Truncate at 10
         gene_vals[gene_vals > 10] <- 10
         df[[input$gene]] <- gene_vals
@@ -182,7 +182,7 @@ server <- function(input, output) {
       } else {
         ind <- which(gene_names == input$gene)
         # Come back here if truncation is the culprit
-        col_vec <- clytia_loom[["matrix"]][,ind]
+        col_vec <- clytia_loom[["layers/scale_data"]][,ind]
         colors_use <- velo_set_colors(col_mode, col_vec, input$alpha)
       }
       showNotification("Computing arrows", duration = NULL)
