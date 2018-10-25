@@ -16,12 +16,15 @@ library(shinycssloaders)
 # To do:
 # Use plot caching
 # Use async programming
+# Speed up retrieval of scaled data
+# Use Plotly itself, rather than ggplotly, to make the interactive plot, 
+# see if it speeds things up
 # Display table showing marker genes for each cluster
 # It would be cool if I can let the users click on a gene to plot it
 
 cell_attrs <- readRDS("clytia_cell_attrs.Rds")
 gene_names <- readRDS("clytia_gene_names.Rds")
-clytia_loom <- connect("clytia.loom")
+clytia_loom <- connect("clytia_scaled.loom")
 theme_set(theme_bw())
 # Set cell colors for velocyto plot
 velo_set_colors <- function(mode = "discrete", vec, alpha) {
@@ -153,7 +156,7 @@ server <- function(input, output) {
       df <- cell_attrs[, c(names_get, "barcode")]
       if (input$color_by == "gene") {
         ind <- which(gene_names == input$gene)
-        gene_vals <- clytia_loom[["layers/scale_data"]][,ind]
+        gene_vals <- clytia_loom[["matrix"]][,ind]
         # Truncate at 10
         gene_vals[gene_vals > 10] <- 10
         df[[input$gene]] <- gene_vals
@@ -182,7 +185,7 @@ server <- function(input, output) {
       } else {
         ind <- which(gene_names == input$gene)
         # Come back here if truncation is the culprit
-        col_vec <- clytia_loom[["layers/scale_data"]][,ind]
+        col_vec <- clytia_loom[["matrix"]][,ind]
         colors_use <- velo_set_colors(col_mode, col_vec, input$alpha)
       }
       showNotification("Computing arrows", duration = NULL)

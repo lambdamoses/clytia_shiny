@@ -188,3 +188,8 @@ write_csv(clytia_markers, "clytia_cluster_markers.csv")
 ```{r}
 clytia_loom$close_all()
 ```
+
+```{r}
+clytia_scaled <- create("clytia_scaled.loom", data = clytia@scale.data)
+```
+
