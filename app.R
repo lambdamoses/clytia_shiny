@@ -7,6 +7,17 @@ library(plotly)
 library(shinythemes)
 library(scales)
 library(velocyto.R)
+# For async programming
+library(future)
+library(promises)
+# For loader for slow processes
+library(shinycssloaders)
+
+# To do:
+# Use plot caching
+# Use async programming
+# Display table showing marker genes for each cluster
+# It would be cool if I can let the users click on a gene to plot it
 
 cell_attrs <- readRDS("clytia_cell_attrs.Rds")
 gene_names <- readRDS("clytia_gene_names.Rds")
@@ -16,17 +27,12 @@ theme_set(theme_bw())
 velo_set_colors <- function(mode = "discrete", vec, alpha) {
   switch(mode,
          "discrete" = {
-           vec <- as.numeric(vec)
-           color_map <- tibble(values = unique(vec)) %>% 
-             arrange(values) %>% 
-             mutate(color = hue_pal()(length(values)))
-           color_map2 <- tibble(values = vec) %>% 
-             left_join(color_map, by = "values")
-           setNames(ac(color_map2$color, alpha = alpha), cell_attrs$cell_names)
+           setNames(ac(cell_attrs$cluster_colors, alpha = alpha), 
+                    cell_attrs$barcode)
          },
          "continuous" = {
            color_vec <- viridis_pal()(256)[as.numeric(cut(vec, 256))]
-           setNames(ac(color_vec, alpha = alpha), cell_attrs$cell_names)
+           setNames(ac(color_vec, alpha = alpha), cell_attrs$barcode)
          })
 }
 
@@ -139,15 +145,18 @@ server <- function(input, output) {
     names_get <- c(paste0(input$dim_reduction, c(input$dim_use_x, input$dim_use_y)))
     if (input$velo) {
       df <- as.matrix(cell_attrs[,names_get])
-      rownames(df) <- cell_attrs$cell_names
+      rownames(df) <- cell_attrs$barcode
     } else {
       if (!input$color_by %in% c("none", "cell_density", "gene")) {
         names_get <- c(names_get, input$color_by)
       }
-      df <- cell_attrs[,names_get]
+      df <- cell_attrs[, c(names_get, "barcode")]
       if (input$color_by == "gene") {
         ind <- which(gene_names == input$gene)
-        df[[input$gene]] <- clytia_loom[["matrix"]][,ind]
+        gene_vals <- clytia_loom[["matrix"]][,ind]
+        # Truncate at 10
+        gene_vals[gene_vals > 10] <- 10
+        df[[input$gene]] <- gene_vals
       }
     }
     df
@@ -172,6 +181,7 @@ server <- function(input, output) {
         colors_use <- velo_set_colors(col_mode, col_vec, input$alpha)
       } else {
         ind <- which(gene_names == input$gene)
+        # Come back here if truncation is the culprit
         col_vec <- clytia_loom[["matrix"]][,ind]
         colors_use <- velo_set_colors(col_mode, col_vec, input$alpha)
       }
@@ -183,7 +193,7 @@ server <- function(input, output) {
                                      cex = input$pt_size)
     } else {
       dr_names <- paste0(input$dim_reduction, c(input$dim_use_x, input$dim_use_y))
-      p <- ggplot(df(), aes_string(dr_names[1], dr_names[2]))
+      p <- ggplot(df(), aes_string(dr_names[1], dr_names[2], label = "barcode"))
       if (input$color_by == "none") {
         p <- p +
           geom_point(size = input$pt_size, alpha = input$alpha)
@@ -215,10 +225,10 @@ server <- function(input, output) {
       if (if_velo()) {
         textOutput("text_out")
       } else {
-        plotlyOutput("Plotly_out", height = input$dimension[1] / 2)
+        withSpinner(plotlyOutput("Plotly_out", height = input$dimension[1] / 2))
       }
     } else {
-      plotOutput("Plot_out", height = input$dimension[1] / 2)
+      withSpinner(plotOutput("Plot_out", height = input$dimension[1] / 2))
     }
   })
   output$text_out <- renderText("Interactive mode is not available for RNA velocity plot yet.
