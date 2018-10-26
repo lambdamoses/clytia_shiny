@@ -131,7 +131,8 @@ server <- function(input, output) {
   
   # Load data required for velocyto plot only when velo is TRUE
   observeEvent(input$submit, {
-    if (if_velo() && !exists("show1") && !exists("velo") && !if_interactive()) {
+    if (if_velo() && !exists("show1") && !exists("velo") && !if_interactive() &&
+        color_by() != "cell_density") {
       showNotification("Loading RNA velocity results")
       show1 <<- readRDS("clytia_show.Rds")
       velo <<- readRDS("clytia_velocity.Rds")
@@ -162,7 +163,7 @@ server <- function(input, output) {
   })
   
   fig_height <- reactive({
-    if (!if_velo() && color_by() %in% c("none", "cell_density")) {
+    if (if_velo() || color_by() %in% c("none", "cell_density")) {
       input$dimension[1] * 3/8
     } else {
       input$dimension[1] * 6/8
