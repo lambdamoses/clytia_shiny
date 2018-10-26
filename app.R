@@ -142,6 +142,9 @@ server <- function(input, output) {
   
   # The data frame used for plotting
   df <- eventReactive(input$submit, {
+    max_dims <- if (input$dim_reduction == "PCA") 75 else 2
+    validate(need(input$dim_use_x <= max_dims && input$dim_use_y <= max_dims,
+                  paste(input$dim_reduction, "was only done up to dimension", max_dims)))
     names_get <- c(paste0(input$dim_reduction, c(input$dim_use_x, input$dim_use_y)))
     if (input$velo) {
       df <- as.matrix(cell_attrs[,names_get])
@@ -174,6 +177,8 @@ server <- function(input, output) {
   })
   
   output$Plot2 <- renderUI({
+    validate(need(!if_velo() && !color_by() %in% c("none", "cell_density"),
+                  ""))
     if (color_by() %in% c("none", "cell_density") || if_velo()) {
       return()
     } else {
@@ -311,12 +316,13 @@ server <- function(input, output) {
         col_vec <- clytia_loom[["matrix"]][,ind]
         colors_use <- velo_set_colors(col_mode, col_vec, alpha())
       }
+      nms <- colnames(df())
       showNotification("Computing arrows", duration = NULL)
       show.velocity.on.embedding.cor(emb = df(), 
                                      vel = velo, show.grid.flow = TRUE, 
                                      arrow.scale = 3, grid.n = 40, cc = show1$cc,
                                      cell.colors = colors_use,
-                                     cex = pt_size())
+                                     cex = pt_size(), xlab = nms[1], ylab = nms[2])
     } else {
       dr_names <- paste0(dim_reduction(), c(dim_use_x(), dim_use_y()))
       p <- ggplot(df(), aes_string(dr_names[1], dr_names[2], label = "barcode"))
@@ -349,6 +355,7 @@ server <- function(input, output) {
   })
   
   output$Plot_out2 <- renderPlot({
+    validate(need(!color_by() %in% c("none", "cell_density") && !if_velo(), ""))
     # Add violin plot or barplot
     if (color_by() == "cluster") {
       p2 <<- ggplot(df(), aes(cluster, fill = cluster)) +
