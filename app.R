@@ -151,6 +151,8 @@ server <- function(input, output) {
       }
       df <- cell_attrs[, c(names_get, "barcode", "cluster")]
       if (input$color_by == "gene") {
+        validate(need(input$gene %in% gene_names,
+                      paste("Gene", input$gene, "is absent from this dataset.")))
         ind <- which(gene_names == input$gene)
         gene_vals <- clytia_loom[["matrix"]][,ind]
         # Truncate at 10
@@ -172,11 +174,7 @@ server <- function(input, output) {
   
   output$Plot <- renderUI({ 
     if (if_interactive()) {
-      if (if_velo()) {
-        textOutput("text_out")
-      } else {
         withSpinner(plotlyOutput("Plotly_out", height = fig_height()))
-      }
     } else {
       withSpinner(plotOutput("Plot_out", height = fig_height()))
     }
@@ -225,6 +223,9 @@ server <- function(input, output) {
   output$text_out <- renderText("Interactive mode is not available for RNA velocity plot yet.
                                 It will be available for the next release of velocyto.R.")
   output$Plotly_out <- renderPlotly({
+    validate(need(!if_velo(), 
+                  "Interactive mode is not available for RNA velocity plots at present.
+                  It should be available with the next release of velocyto.R."))
     # Using just plotly is faster than ggplotly
     if (color_by() == "cell_density") {
       nms <- names(df())
@@ -281,6 +282,8 @@ server <- function(input, output) {
   
   output$Plot_out <- renderPlot({
     if (if_velo()) {
+      validate(need(color_by() != "cell_density",
+                    "Can't color by cell density in RNA-velocity plot."))
       # I really look forward to the next release of velocyto.R, when ggplot2 will be used
       if (color_by() == "cluster") {
         col_mode <- "discrete"
@@ -288,10 +291,6 @@ server <- function(input, output) {
         col_mode <- "continuous"
       }
       if (color_by() %in% c("cell_density", "none")) {
-        if (color_by() == "cell_density") {
-          showNotification("Can't color by cell density in RNA velocity plot",
-                           duration = NULL)
-        }
         colors_use <- NULL
       } else if (color_by() != "gene") {
         col_vec <- cell_attrs[,color_by()]
