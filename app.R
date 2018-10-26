@@ -81,7 +81,8 @@ ui <- fluidPage(
       
       # Show the plot
       mainPanel(
-        uiOutput("Plot")
+        uiOutput("Plot"),
+        uiOutput("Plot2") # Put the violin plot in a separate place
       )
   )
 )
@@ -164,22 +165,25 @@ server <- function(input, output) {
     df
   })
   
-  fig_height <- reactive({
-    if (if_velo() || color_by() %in% c("none", "cell_density")) {
-      input$dimension[1] * 3/8
-    } else {
-      input$dimension[1] * 6/8
-    }
-  })
-  
   output$Plot <- renderUI({ 
     if (if_interactive()) {
-        withSpinner(plotlyOutput("Plotly_out", height = fig_height()))
+        withSpinner(plotlyOutput("Plotly_out", height = input$dimension[1] * 3/8))
     } else {
-      withSpinner(plotOutput("Plot_out", height = fig_height()))
+      withSpinner(plotOutput("Plot_out", height = input$dimension[1] * 3/8))
     }
   })
   
+  output$Plot2 <- renderUI({
+    if (color_by() %in% c("none", "cell_density") || if_velo()) {
+      return()
+    } else {
+      if (if_interactive()) {
+        withSpinner(plotlyOutput("Plotly_out2", height = input$dimension[1] * 3/8))
+      } else {
+        withSpinner(plotOutput("Plot_out2", height = input$dimension[1] * 3/8))
+      }
+    }
+  })
   output$save_ui <- renderUI({
     if (!input$velo && input$save_plot && !input$interactive) {
       if (!color_by() %in% c("none", "cell_density")) {
@@ -260,24 +264,30 @@ server <- function(input, output) {
       p <- p %>% 
         layout(plot_bgcolor = "#7F7F7F")
     }
-    if (color_by() %in% c("none", "cell_density")) {
-      p
-    } else if (color_by() == "cluster") {
+    p
+  })
+  
+  output$Plotly_out2 <- renderPlotly({
+    validate(need(!if_velo(), 
+                  "Interactive mode is not available for RNA velocity plots at present.
+                  It should be available with the next release of velocyto.R."))
+    if (color_by() == "cluster") {
       counts <- tapply(rep(1,12165), df()$cluster, length)
       p2 <- plot_ly(x = 0:19, y = counts,
                     color = as.factor(0:19), colors = hue_pal()(20),
                     type = "bar", hoverinfo = "text", text = paste(counts)) %>% 
-        layout(showlegend = FALSE, xaxis = list(title = "cluster"),
-               yaxis = list(title = "count"))
-      subplot(p, p2, nrows = 2, titleX = TRUE, titleY = TRUE, margin = 0.05)
+        layout(xaxis = list(title = "cluster"),
+               yaxis = list(title = "count"),
+               showlegend = FALSE)
     } else {
+      nms <- names(df())
       p2 <- plot_ly(x = df()$cluster, y = df()[,3], color = df()$cluster,
                     colors = hue_pal()(20), type = "violin",
                     box = list(visible = FALSE)) %>% 
         layout(xaxis = list(title = "cluster"), 
                yaxis = list(title = nms[3]))
-      subplot(p, p2, nrows = 2, titleX = TRUE, titleY = TRUE, margin = 0.05)
     }
+    p2
   })
   
   output$Plot_out <- renderPlot({
@@ -333,37 +343,28 @@ server <- function(input, output) {
       if (theme_plt() == "dark") {
         p <- p + theme_dark()
       }
-      # Add violin plot or barplot
-      if (color_by() %in% c("none", "cell_density")) {
-        p1 <<- p
-        p
-      } else if (color_by() == "cluster") {
-        p2 <- ggplot(df(), aes(cluster, fill = cluster)) +
-          geom_bar() +
-          theme(legend.position = "none")
-        p1 <<- p
-        p2 <<- p2
-        grid.arrange(p, p2, heights = c(1,1))
-      } else if (color_by() == "gene") {
-        p2 <- ggplot(df(), aes_string("cluster", gene(), fill = "cluster")) +
-          geom_violin() +
-          theme(legend.position = "none")
-        if (theme_plt() == "dark") p2 <- p2 + theme_dark()
-        p1 <<- p
-        p2 <<- p2
-        grid.arrange(p, p2, heights = c(1,1))
-      } else {
-        p2 <- ggplot(df(), aes_string("cluster", color_by(), fill = "cluster")) +
-          geom_violin() +
-          theme(legend.position = "none")
-        if (theme_plt() == "dark") p2 <- p2 + theme_dark()
-        p1 <<- p
-        p2 <<- p2
-        grid.arrange(p, p2, heights = c(1,1))
-      }
+      p1 <<- p
+      p
     }
   })
   
+  output$Plot_out2 <- renderPlot({
+    # Add violin plot or barplot
+    if (color_by() == "cluster") {
+      p2 <<- ggplot(df(), aes(cluster, fill = cluster)) +
+        geom_bar() +
+        theme(legend.position = "none")
+    } else if (color_by() == "gene") {
+      p2 <<- ggplot(df(), aes_string("cluster", gene(), fill = "cluster")) +
+        geom_violin() +
+        theme(legend.position = "none")
+    } else {
+      p2 <<- ggplot(df(), aes_string("cluster", color_by(), fill = "cluster")) +
+        geom_violin() +
+        theme(legend.position = "none")
+    }
+    p2
+  })
   # Default file name
   output$Save <- downloadHandler(filename = "plot", 
                                  content = function (file) {
