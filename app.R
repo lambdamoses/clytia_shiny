@@ -10,14 +10,15 @@ library(future)
 library(promises)
 # For loader for slow processes
 library(shinycssloaders)
+# For violin plot
+library(gridExtra)
 
 # To do:
-# Use plot caching
+# Use plot caching (need to wait for the next shiny release)
 # Use async programming
 # Speed up retrieval of scaled data
-# Use Plotly itself, rather than ggplotly, to make the interactive plot, 
-# see if it speeds things up
 # Display table showing marker genes for each cluster
+# Add violin plot to show distribution of gene expression
 # It would be cool if I can let the users click on a gene to plot it
 
 cell_attrs <- readRDS("clytia_cell_attrs.Rds")
@@ -139,7 +140,10 @@ server <- function(input, output) {
   gene <- eventReactive(input$submit, input$gene)
   n_bins <- eventReactive(input$submit, input$n_bins)
   theme_plt <- eventReactive(input$submit, input$theme)
-
+  dim_reduction <- eventReactive(input$submit, input$dim_reduction)
+  dim_use_x <- eventReactive(input$submit, input$dim_use_x)
+  dim_use_y <- eventReactive(input$submit, input$dim_use_y)
+  
   # Load data required for velocyto plot only when velo is TRUE
   observeEvent(input$submit, {
     if (if_velo() && !exists("show1") && !exists("velo") && !if_interactive()) {
@@ -159,75 +163,24 @@ server <- function(input, output) {
       if (!input$color_by %in% c("none", "cell_density", "gene")) {
         names_get <- c(names_get, input$color_by)
       }
-      df <- cell_attrs[, c(names_get, "barcode")]
+      df <- cell_attrs[, c(names_get, "barcode", "cluster")]
       if (input$color_by == "gene") {
         ind <- which(gene_names == input$gene)
         gene_vals <- clytia_loom[["matrix"]][,ind]
         # Truncate at 10
         gene_vals[gene_vals > 10] <- 10
         df[[input$gene]] <- gene_vals
-        df <- df[,c(1,2,4,3)]
+        df <- df[,c(1,2,5,3,4)]
       }
     }
     df
   })
-  # Generate the basic plot
-  g <- eventReactive(input$submit, {
-    if (input$velo) {
-      # I really look forward to the next release of velocyto.R, when ggplot2 will be used
-      if (input$color_by == "cluster") {
-        col_mode <- "discrete"
-      } else {
-        col_mode <- "continuous"
-      }
-      if (input$color_by %in% c("cell_density", "none")) {
-        if (input$color_by == "cell_density") {
-          showNotification("Can't color by cell density in RNA velocity plot",
-                           duration = NULL)
-        }
-        colors_use <- NULL
-      } else if (input$color_by != "gene") {
-        col_vec <- cell_attrs[,input$color_by]
-        colors_use <- velo_set_colors(col_mode, col_vec, input$alpha)
-      } else {
-        ind <- which(gene_names == input$gene)
-        # Come back here if truncation is the culprit
-        col_vec <- clytia_loom[["matrix"]][,ind]
-        colors_use <- velo_set_colors(col_mode, col_vec, input$alpha)
-      }
-      showNotification("Computing arrows", duration = NULL)
-      show.velocity.on.embedding.cor(emb = df(), 
-                                     vel = velo, show.grid.flow = TRUE, 
-                                     arrow.scale = 3, grid.n = 40, cc = show1$cc,
-                                     cell.colors = colors_use,
-                                     cex = input$pt_size)
+  
+  fig_height <- reactive({
+    if (!if_velo() && color_by() %in% c("none", "cell_density")) {
+      input$dimension[1] * 3/8
     } else {
-      dr_names <- paste0(input$dim_reduction, c(input$dim_use_x, input$dim_use_y))
-      p <- ggplot(df(), aes_string(dr_names[1], dr_names[2], label = "barcode"))
-      if (input$color_by == "none") {
-        p <- p +
-          geom_point(size = input$pt_size, alpha = input$alpha)
-      } else if (input$color_by == "cell_density") {
-        p <- p +
-          geom_hex(bins = input$n_bins) +
-          scale_fill_viridis_c()
-      } else if (input$color_by == "gene") {
-        p <- p +
-          geom_point(aes_string(color = input$gene), size = input$pt_size, alpha = input$alpha) +
-          scale_color_viridis_c()
-      } else {
-        p <- p +
-          geom_point(aes_string(color = input$color_by), 
-                     size = input$pt_size, alpha = input$alpha)
-        if (input$color_by != "cluster") {
-          p <- p +
-            scale_color_viridis_c()
-        }
-      }
-      if (input$theme == "dark") {
-        p <- p + theme_dark()
-      }
-      p
+      input$dimension[1] * 6/8
     }
   })
   
@@ -236,12 +189,13 @@ server <- function(input, output) {
       if (if_velo()) {
         textOutput("text_out")
       } else {
-        withSpinner(plotlyOutput("Plotly_out", height = input$dimension[1] / 2))
+        withSpinner(plotlyOutput("Plotly_out", height = fig_height()))
       }
     } else {
-      withSpinner(plotOutput("Plot_out", height = input$dimension[1] / 2))
+      withSpinner(plotOutput("Plot_out", height = fig_height()))
     }
   })
+  
   output$text_out <- renderText("Interactive mode is not available for RNA velocity plot yet.
                                 It will be available for the next release of velocyto.R.")
   output$Plotly_out <- renderPlotly({
@@ -256,6 +210,7 @@ server <- function(input, output) {
       p <- plot_ly(x = df()[,1], y = df()[,2], hoverinfo = "text",
                    text = paste0(nms[1], ": ", round(df()[,1], 2), "\n",
                                  nms[2], ": ", round(df()[,2],2), "\n",
+                                 "cluster: ", df()$cluster, "\n",
                                  "barcode: ", df()$barcode)) %>% 
         layout(xaxis = list(title = nms[1], zeroline = FALSE), 
                yaxis = list(title = nms[2], zeroline = FALSE))
@@ -278,10 +233,105 @@ server <- function(input, output) {
       p <- p %>% 
         layout(plot_bgcolor = "#7F7F7F")
     }
-    p
+    if (color_by() %in% c("none", "cell_density")) {
+      p
+    } else if (color_by() == "cluster") {
+      counts <- tapply(rep(1,12165), df()$cluster, length)
+      p2 <- plot_ly(x = 0:19, y = counts,
+                    color = as.factor(0:19), colors = hue_pal()(20),
+                    type = "bar", hoverinfo = "text", text = paste(counts)) %>% 
+        layout(showlegend = FALSE, xaxis = list(title = "cluster"),
+               yaxis = list(title = "count"))
+      subplot(p, p2, nrows = 2, titleX = TRUE, titleY = TRUE, margin = 0.05)
+    } else {
+      p2 <- plot_ly(x = df()$cluster, y = df()[,3], color = df()$cluster,
+                    colors = hue_pal()(20), type = "violin",
+                    box = list(visible = FALSE)) %>% 
+        layout(xaxis = list(title = "cluster"), 
+               yaxis = list(title = nms[3]))
+      subplot(p, p2, nrows = 2, titleX = TRUE, titleY = TRUE, margin = 0.05)
+    }
   })
   
-  output$Plot_out <- renderPlot(g())
+  output$Plot_out <- renderPlot({
+    if (if_velo()) {
+      # I really look forward to the next release of velocyto.R, when ggplot2 will be used
+      if (color_by() == "cluster") {
+        col_mode <- "discrete"
+      } else {
+        col_mode <- "continuous"
+      }
+      if (color_by() %in% c("cell_density", "none")) {
+        if (color_by() == "cell_density") {
+          showNotification("Can't color by cell density in RNA velocity plot",
+                           duration = NULL)
+        }
+        colors_use <- NULL
+      } else if (color_by() != "gene") {
+        col_vec <- cell_attrs[,color_by()]
+        colors_use <- velo_set_colors(col_mode, col_vec, alpha())
+      } else {
+        ind <- which(gene_names == gene())
+        # Come back here if truncation is the culprit
+        col_vec <- clytia_loom[["matrix"]][,ind]
+        colors_use <- velo_set_colors(col_mode, col_vec, alpha())
+      }
+      showNotification("Computing arrows", duration = NULL)
+      show.velocity.on.embedding.cor(emb = df(), 
+                                     vel = velo, show.grid.flow = TRUE, 
+                                     arrow.scale = 3, grid.n = 40, cc = show1$cc,
+                                     cell.colors = colors_use,
+                                     cex = pt_size())
+    } else {
+      dr_names <- paste0(dim_reduction(), c(dim_use_x(), dim_use_y()))
+      p <- ggplot(df(), aes_string(dr_names[1], dr_names[2], label = "barcode"))
+      if (color_by() == "none") {
+        p <- p +
+          geom_point(size = pt_size(), alpha = alpha())
+      } else if (color_by() == "cell_density") {
+        p <- p +
+          geom_hex(bins = n_bins()) +
+          scale_fill_viridis_c()
+      } else if (color_by() == "gene") {
+        p <- p +
+          geom_point(aes_string(color = gene()), size = pt_size(), alpha = alpha()) +
+          scale_color_viridis_c()
+      } else {
+        p <- p +
+          geom_point(aes_string(color = color_by()), 
+                     size = pt_size(), alpha = alpha())
+        if (color_by() != "cluster") {
+          p <- p +
+            scale_color_viridis_c()
+        }
+      }
+      if (theme_plt() == "dark") {
+        p <- p + theme_dark()
+      }
+      # Add violin plot or barplot
+      if (color_by() %in% c("none", "cell_density")) {
+        p
+      } else if (color_by() == "cluster") {
+        p2 <- ggplot(df(), aes(cluster, fill = cluster)) +
+          geom_bar() +
+          theme(legend.position = "none")
+        grid.arrange(p, p2, heights = c(1,1))
+      } else if (color_by() == "gene") {
+        p2 <- ggplot(df(), aes_string("cluster", gene(), fill = "cluster")) +
+          geom_violin() +
+          theme(legend.position = "none")
+        if (theme_plt() == "dark") p2 <- p2 + theme_dark()
+        grid.arrange(p, p2, heights = c(1,1))
+      } else {
+        p2 <- ggplot(df(), aes_string("cluster", color_by(), fill = "cluster")) +
+          geom_violin() +
+          theme(legend.position = "none")
+        if (theme_plt() == "dark") p2 <- p2 + theme_dark()
+        grid.arrange(p, p2, heights = c(1,1))
+      }
+    }
+  })
+  
   # Default file name
   output$Save <- downloadHandler(filename = "plot", 
                                  content = function (file) {
