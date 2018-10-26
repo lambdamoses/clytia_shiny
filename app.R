@@ -16,9 +16,7 @@ library(gridExtra)
 # To do:
 # Use plot caching (need to wait for the next shiny release)
 # Use async programming
-# Speed up retrieval of scaled data
 # Display table showing marker genes for each cluster
-# Add violin plot to show distribution of gene expression
 # It would be cool if I can let the users click on a gene to plot it
 
 cell_attrs <- readRDS("clytia_cell_attrs.Rds")
@@ -68,30 +66,17 @@ ui <- fluidPage(
                      choices = c("none", "cluster", "gene", "nGene", "nUMI", "cell_density"),
                      selected = "none"),
          # options depend on what to use to color
-         uiOutput("cont_params", inline = TRUE),
+         uiOutput("cont_params"),
          radioButtons("theme", "Plot theme", choices = c("light", "dark")),
          helpText("Plotting RNA velocity may take a while (about 1 minute)"),
          checkboxInput("velo", "Plot RNA velocity"),
          uiOutput("velo_params"),
          checkboxInput("interactive", "Interactive plot", value = FALSE),
          actionButton("submit", "Make plot"),
-         helpText("Save plot only works for static plots"),
-         checkboxInput("save_plot", "Save plot?",
-                       value = FALSE),
-         conditionalPanel(condition = "input.save_plot == true && input.interactive == false",
-                          selectInput("fig_unit", "Plot size unit",
-                                      choices = c("in", "cm", "mm"),
-                                      label = c("inch", "centimeter", 
-                                                "millimeter")),
-                          fluidRow(column(6, numericInput("fig_width", 
-                                                          "Plot width", 
-                                                          value = 6)),
-                                   column(6, numericInput("fig_height",
-                                                          "Plot height",
-                                                          value = 4))),
-                          radioButtons("plot_format", "Format",
-                                       choices = c("jpeg", "png", "pdf", "tiff")),
-                          downloadButton("Save", label = "Save"))
+         conditionalPanel("input.velo == false && input.interactive == false",
+                          checkboxInput("save_plot", "Save plot?",
+                                        value = FALSE)),
+         uiOutput("save_ui", inline = TRUE)
       ),
       
       # Show the plot
@@ -193,6 +178,46 @@ server <- function(input, output) {
       }
     } else {
       withSpinner(plotOutput("Plot_out", height = fig_height()))
+    }
+  })
+  
+  output$save_ui <- renderUI({
+    if (!input$velo && input$save_plot && !input$interactive) {
+      if (!color_by() %in% c("none", "cell_density")) {
+        wellPanel(radioButtons("which_save", "Which plot to save?",
+                            choiceNames = c("Top plot", "Bottom plot"),
+                            choiceValues = c("p1", "p2")),
+               selectInput("fig_unit", "Plot size unit",
+                           choices = c("in", "cm", "mm"),
+                           label = c("inch", "centimeter", 
+                                     "millimeter")),
+               fluidRow(column(6, numericInput("fig_width", 
+                                               "Plot width", 
+                                               value = 6)),
+                        column(6, numericInput("fig_height",
+                                               "Plot height",
+                                               value = 4))),
+               radioButtons("plot_format", "Format",
+                            choices = c("jpeg", "png", "pdf", "tiff")),
+               downloadButton("Save", label = "Save")
+        )
+      } else {
+        wellPanel(selectInput("fig_unit", "Plot size unit",
+                           choices = c("in", "cm", "mm"),
+                           label = c("inch", "centimeter", 
+                                     "millimeter")),
+               fluidRow(column(6, numericInput("fig_width", 
+                                               "Plot width", 
+                                               value = 6)),
+                        column(6, numericInput("fig_height",
+                                               "Plot height",
+                                               value = 4))),
+               radioButtons("plot_format", "Format",
+                            choices = c("jpeg", "png", "pdf", "tiff")),
+               downloadButton("Save", label = "Save"))
+      }
+    } else {
+      return()
     }
   })
   
@@ -310,23 +335,30 @@ server <- function(input, output) {
       }
       # Add violin plot or barplot
       if (color_by() %in% c("none", "cell_density")) {
+        p1 <<- p
         p
       } else if (color_by() == "cluster") {
         p2 <- ggplot(df(), aes(cluster, fill = cluster)) +
           geom_bar() +
           theme(legend.position = "none")
+        p1 <<- p
+        p2 <<- p2
         grid.arrange(p, p2, heights = c(1,1))
       } else if (color_by() == "gene") {
         p2 <- ggplot(df(), aes_string("cluster", gene(), fill = "cluster")) +
           geom_violin() +
           theme(legend.position = "none")
         if (theme_plt() == "dark") p2 <- p2 + theme_dark()
+        p1 <<- p
+        p2 <<- p2
         grid.arrange(p, p2, heights = c(1,1))
       } else {
         p2 <- ggplot(df(), aes_string("cluster", color_by(), fill = "cluster")) +
           geom_violin() +
           theme(legend.position = "none")
         if (theme_plt() == "dark") p2 <- p2 + theme_dark()
+        p1 <<- p
+        p2 <<- p2
         grid.arrange(p, p2, heights = c(1,1))
       }
     }
@@ -335,7 +367,14 @@ server <- function(input, output) {
   # Default file name
   output$Save <- downloadHandler(filename = "plot", 
                                  content = function (file) {
-                                   ggsave(file, plot = g(),
+                                   pl <- if (color_by() %in% c("none", "cell_density")) {
+                                     p1
+                                   } else if (input$which_save == "p2") {
+                                     p2
+                                   } else {
+                                     p1
+                                   }
+                                   ggsave(file, pl,
                                           width = input$fig_width,
                                           height = input$fig_height,
                                           units = input$fig_unit,
