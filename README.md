@@ -6,4 +6,4 @@ You can also plot [RNA velocity](http://velocyto.org) with this app.
 You can also customize the plots, make the plots interactive, and save the static plots. 
 (Interactive mode and saving plots are not supported for RNA velocity plots yet; those will be supported with the next release of `velocyto.R`)
 
-![](https://res.cloudinary.com/lambdamoses/image/upload/v1539987993/004.png)
+![](https://res.cloudinary.com/lambdamoses/image/upload/v1540595772/011.png)
