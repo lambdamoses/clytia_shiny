@@ -6,12 +6,10 @@ library(shinythemes)
 library(scales)
 library(velocyto.R)
 # For async programming
-library(future)
-library(promises)
+#library(future)
+#library(promises)
 # For loader for slow processes
 library(shinycssloaders)
-# For violin plot
-library(gridExtra)
 
 # To do:
 # Use plot caching (need to wait for the next shiny release)
@@ -129,6 +127,8 @@ server <- function(input, output) {
   dim_reduction <- eventReactive(input$submit, input$dim_reduction)
   dim_use_x <- eventReactive(input$submit, input$dim_use_x)
   dim_use_y <- eventReactive(input$submit, input$dim_use_y)
+  n_grid <- eventReactive(input$submit, input$n_grid)
+  arrow_scale <- eventReactive(input$submit, input$arrow_scale)
   
   # Load data required for velocyto plot only when velo is TRUE
   observeEvent(input$submit, {
@@ -317,10 +317,10 @@ server <- function(input, output) {
         colors_use <- velo_set_colors(col_mode, col_vec, alpha())
       }
       nms <- colnames(df())
-      showNotification("Computing arrows", duration = NULL)
+      showNotification("Computing arrows", duration = 45)
       show.velocity.on.embedding.cor(emb = df(), 
                                      vel = velo, show.grid.flow = TRUE, 
-                                     arrow.scale = 3, grid.n = 40, cc = show1$cc,
+                                     arrow.scale = arrow_scale(), grid.n = n_grid(), cc = show1$cc,
                                      cell.colors = colors_use,
                                      cex = pt_size(), xlab = nms[1], ylab = nms[2])
     } else {
