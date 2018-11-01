@@ -13,7 +13,7 @@ library(shinycssloaders)
 
 # To do:
 # Use plot caching (need to wait for the next shiny release)
-# Use async programming
+# Use async programming; this requires me to rewrite the velocyto plotting function
 # Display table showing marker genes for each cluster
 # It would be cool if I can let the users click on a gene to plot it
 
@@ -34,59 +34,79 @@ velo_set_colors <- function(mode = "discrete", vec, alpha) {
          })
 }
 
-# Define UI for plot settings
-ui <- fluidPage(
+# Define UI--------------------------------------------------------------
+ui <- navbarPage("scRNA-seq data explorer",
    theme = shinytheme("flatly"),
-   # Application title
-   titlePanel("Clytia data explorer"),
-   # Sidebar with a slider input for number of bins 
-   sidebarLayout(
-      sidebarPanel(
-        tags$head(tags$script('
-                                var dimension = [0, 0];
-                              $(document).on("shiny:connected", function(e) {
-                              dimension[0] = window.innerWidth;
-                              dimension[1] = window.innerHeight;
-                              Shiny.onInputChange("dimension", dimension);
-                              });
-                              $(window).resize(function(e) {
-                              dimension[0] = window.innerWidth;
-                              dimension[1] = window.innerHeight;
-                              Shiny.onInputChange("dimension", dimension);
-                              });
-                              ')),
-         radioButtons("dim_reduction", "Dimension reduction",
-                      choices = c("PCA", "tSNE", "UMAP")),
-         fluidRow(
-           column(6, numericInput("dim_use_x", "Dimension for x", 1, min = 1, step = 1)),
-           column(6, numericInput("dim_use_y", "Dimension for y", 2, min = 1, step = 1))),
-         selectInput("color_by", "Color by", 
-                     choices = c("none", "cluster", "gene", "nGene", "nUMI", "cell_density"),
-                     selected = "none"),
-         # options depend on what to use to color
-         uiOutput("cont_params"),
-         radioButtons("theme", "Plot theme", choices = c("light", "dark")),
-         helpText("Plotting RNA velocity may take a while (about 1 minute)"),
-         checkboxInput("velo", "Plot RNA velocity"),
-         uiOutput("velo_params"),
-         checkboxInput("interactive", "Interactive plot", value = FALSE),
-         actionButton("submit", "Make plot"),
-         conditionalPanel("input.velo == false && input.interactive == false",
-                          checkboxInput("save_plot", "Save plot?",
-                                        value = FALSE)),
-         uiOutput("save_ui", inline = TRUE)
-      ),
-      
-      # Show the plot
-      mainPanel(
-        uiOutput("Plot"),
-        uiOutput("Plot2") # Put the violin plot in a separate place
-      )
-  )
+   ## Do dimension reduction, clustering, etc. from scratch---------------
+   tabPanel("Analyze Data",
+            sidebarLayout(sidebarPanel(
+              textInput("path", "Path to loom file from velocyto command line tool on Tolva"),
+              checkboxInput("preprocess", "Preprocess data"),
+              checkboxInput("align", "Align batches"),
+              checkboxInput("dr", "Dimension reduction"),
+              checkboxInput("cluster", "Run clustering"),
+              checkboxInput("marker", "Find marker genes for each cluster"),
+              checkboxInput("velocyto", "Calculate RNA velocity"),
+              actionButton("report", "Download report")
+            ),
+            mainPanel(uiOutput("results")))),
+   
+   ## Plot data-----------------------------------------------------------
+   tabPanel("Plot Data",
+            sidebarLayout(
+              sidebarPanel(
+                tags$head(tags$script('
+                                      var dimension = [0, 0];
+                                      $(document).on("shiny:connected", function(e) {
+                                      dimension[0] = window.innerWidth;
+                                      dimension[1] = window.innerHeight;
+                                      Shiny.onInputChange("dimension", dimension);
+                                      });
+                                      $(window).resize(function(e) {
+                                      dimension[0] = window.innerWidth;
+                                      dimension[1] = window.innerHeight;
+                                      Shiny.onInputChange("dimension", dimension);
+                                      });
+                                      ')),
+                radioButtons("dim_reduction", "Dimension reduction",
+                             choices = c("PCA", "tSNE", "UMAP")),
+                fluidRow(
+                  column(6, numericInput("dim_use_x", "Dimension for x", 1, min = 1, step = 1)),
+                  column(6, numericInput("dim_use_y", "Dimension for y", 2, min = 1, step = 1))),
+                selectInput("color_by", "Color by", 
+                            choices = c("none", "cluster", "gene", "nGene", "nUMI", "cell_density"),
+                            selected = "none"),
+                # options depend on what to use to color
+                uiOutput("cont_params"),
+                radioButtons("theme", "Plot theme", choices = c("light", "dark")),
+                helpText("Plotting RNA velocity may take a while (about 1 minute)"),
+                checkboxInput("velo", "Plot RNA velocity"),
+                uiOutput("velo_params"),
+                checkboxInput("interactive", "Interactive plot", value = FALSE),
+                actionButton("submit", "Make plot"),
+                conditionalPanel("input.velo == false && input.interactive == false",
+                                 checkboxInput("save_plot", "Save plot?",
+                                               value = FALSE)),
+                uiOutput("save_ui", inline = TRUE)
+                ),
+              
+              # Show the plot
+              mainPanel(
+                uiOutput("Plot"),
+                uiOutput("Plot2") # Put the violin plot in a separate place
+              )
+              )),
+   ## Show marker genes in each cluster---------------------
+   tabPanel("Marker Genes"),
+   ## Plot in situ results--------------------
+   tabPanel("Spatial Gene Expression")
 )
 
-# Define server logic required to draw a histogram
+# Server--------------------------------------
 server <- function(input, output) {
+  ## The analysis page--------------------------------
+  
+  ## The plotting page--------------------------
   output$cont_params <- renderUI({
     if (input$color_by == "cell_density") {
       sliderInput("n_bins", "Number of bins", 30, 200, 150, step = 5)
