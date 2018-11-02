@@ -10,6 +10,7 @@ library(velocyto.R)
 #library(promises)
 # For loader for slow processes
 library(shinycssloaders)
+library(DT)
 
 # To do:
 # Use plot caching (need to wait for the next shiny release)
@@ -20,6 +21,7 @@ library(shinycssloaders)
 cell_attrs <- readRDS("clytia_cell_attrs.Rds")
 gene_names <- readRDS("clytia_gene_names.Rds")
 clytia_loom <- connect("clytia_scaled.loom")
+markers <- readRDS("clytia_cluster_markers.rds")
 theme_set(theme_bw())
 # Set cell colors for velocyto plot
 velo_set_colors <- function(mode = "discrete", vec, alpha) {
@@ -35,7 +37,7 @@ velo_set_colors <- function(mode = "discrete", vec, alpha) {
 }
 
 # Define UI--------------------------------------------------------------
-ui <- navbarPage("scRNA-seq data explorer",
+ui <- navbarPage("Clytiapedia",
    theme = shinytheme("flatly"),
    ## Do dimension reduction, clustering, etc. from scratch---------------
    tabPanel("Analyze Data",
@@ -49,7 +51,8 @@ ui <- navbarPage("scRNA-seq data explorer",
               checkboxInput("velocyto", "Calculate RNA velocity"),
               actionButton("report", "Download report")
             ),
-            mainPanel(uiOutput("results")))),
+            mainPanel(tags$p("This page is under construction. 
+                             You may use the Plot Data and the Marker Genes pages for now.")))),
    
    ## Plot data-----------------------------------------------------------
    tabPanel("Plot Data",
@@ -97,9 +100,13 @@ ui <- navbarPage("scRNA-seq data explorer",
               )
               )),
    ## Show marker genes in each cluster---------------------
-   tabPanel("Marker Genes"),
+   tabPanel("Marker Genes",
+            uiOutput("show_clust"),
+            dataTableOutput("show_markers"),
+            value = "marker_genes"),
    ## Plot in situ results--------------------
-   tabPanel("Spatial Gene Expression")
+   tabPanel("Spatial Gene Expression",
+            tags$p("TBA"))
 )
 
 # Server--------------------------------------
@@ -408,6 +415,36 @@ server <- function(input, output) {
                                           units = input$fig_unit,
                                           device = input$plot_format)
                                  })
+  ## The marker gene page-----------------------------------
+  output$show_clust <- renderUI({
+    fluidRow(
+      column(width = 8, offset = 2,
+        withSpinner(plotlyOutput("show_clusters", 
+                             height = input$dimension[1] * 3/8))))
+  })
+  output$show_clusters <- renderPlotly({
+    plot_ly(cell_attrs, x = ~tSNE1, y = ~tSNE2, hoverinfo = "text", key = ~cluster,
+            text = ~paste0("tSNE1: ", round(tSNE1, 2), "\n",
+                          "tSNE2:", round(tSNE2, 2), "\n",
+                          "cluster: ", cluster, "\n",
+                          "barcode: ", barcode)) %>% 
+      layout(xaxis = list(title = "tSNE1", zeroline = FALSE), 
+             yaxis = list(title = "tSNE2", zeroline = FALSE)) %>% 
+      add_markers(type = "scattergl", 
+                  color = ~cluster, colors = hue_pal()(20),
+                  marker = list(size = 3, sizemode = "diameter"))
+  })
+  output$show_markers <- renderDataTable({
+    cl <- event_data(event = "plotly_click")
+    if (length(cl) == 0) {
+      showNotification("Click on a point on the plot to show table")
+      return()
+    } else {
+      formatRound(datatable(markers[markers$cluster == as.numeric(cl$key[[1]]),]),
+                  columns = c("p_val", "avg_logFC", "p_val_adj"),
+                  digits = 3)
+    }
+  })
 }
 
 # Run the application 
