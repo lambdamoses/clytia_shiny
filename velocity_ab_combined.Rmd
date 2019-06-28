@@ -1,0 +1,235 @@
+---
+title: "velocyto"
+author: "Lambda Moses"
+date: "1/9/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(velocyto.R)
+library(Seurat)
+library(tidyverse)
+library(uwot)
+library(zeallot)
+library(viridis)
+library(scales)
+library(foreach)
+library(doParallel)
+library(plotly)
+library(doubletFinder)
+library(loomR)
+registerDoParallel(cores = 6)
+```
+
+```{r}
+c(spliced, unspliced, ambiguous) %<-%
+  read.loom.matrices("./jelly3_merged_sorted_S0WY5.loom")
+```
+
+```{r}
+anyDuplicated(rownames(spliced))
+anyDuplicated(rownames(unspliced))
+anyDuplicated(rownames(ambiguous))
+```
+
+```{r}
+clytia_all <- connect("./jelly3_merged_sorted_S0WY5.loom")
+clytia_mat <- t(clytia_all[["matrix"]][,])
+clytia_mat <- as(clytia_mat, "dgCMatrix")
+```
+What proportion of reads are unspliced?
+```{r}
+sum(unspliced@x) / sum(clytia_mat@x)
+```
+
+```{r}
+# Any duplicated gene name
+anyDuplicated(clytia_all[["row_attrs/Gene"]][])
+```
+
+## Identify doublets
+To see whether there're doublets, I'll use all reads 
+```{r}
+rownames(clytia_mat) <- clytia_all[["row_attrs/Gene"]][]
+colnames(clytia_mat) <- clytia_all[["col_attrs/CellID"]][]
+```
+
+```{r}
+clytia_all_seu <- CreateSeuratObject(clytia_mat, min.cells = 3) %>% 
+  NormalizeData() %>% 
+  ScaleData()
+```
+
+```{r}
+VlnPlot(clytia_all_seu, features.plot = c("nGene", "nUMI"))
+```
+
+```{r}
+summary(clytia_all_seu@meta.data$nUMI)
+```
+
+```{r}
+clytia_all_seu <- FindVariableGenes(clytia_all_seu, y.cutoff = 0.475, x.low.cutoff = 0.0125)
+```
+
+```{r}
+length(clytia_all_seu@var.genes)
+```
+
+```{r}
+clytia_all_seu <- RunPCA(clytia_all_seu, pcs.compute = 75, do.print = FALSE)
+PCElbowPlot(clytia_all_seu, num.pc = 75)
+```
+
+```{r}
+clytia_all_seu <- JackStraw(clytia_all_seu, do.par = TRUE, num.cores = 20, num.pc = 75)
+```
+
+```{r, fig.width = 6, fig.height = 10}
+JackStrawPlot(clytia_all_seu, PCs = 1:75, nCol = 5)
+```
+
+Considering multiple hypothesis testing, I'll use the first 60 PCs for further analysis.
+
+```{r}
+clytia_all_seu <- RunTSNE(clytia_all_seu, dims.use = 1:60)
+```
+
+```{r}
+clytia_all_seu <- doubletFinder(clytia_all_seu, expected.doublets = 150)
+```
+
+```{r}
+hist(clytia_all_seu@meta.data$pANN, breaks = 100)
+```
+
+```{r}
+clytia_all_seu@meta.data %>% 
+  group_by(pANNPredictions) %>% 
+  summarize(min_pAnn = min(pANN))
+```
+
+```{r}
+TSNEPlot(clytia_all_seu, pt.size = 0.5, group.by = "pANNPredictions")
+```
+
+## Spliced
+Then I'll use the data without doublets and with only the spliced data.
+
+```{r}
+singlet_ind <- clytia_all_seu@meta.data$pANNPredictions == "Singlet"
+genes_use <- rownames(clytia_all_seu@data)
+```
+
+```{r}
+spliced <- spliced[genes_use, singlet_ind]
+unspliced <- unspliced[genes_use, singlet_ind]
+```
+
+```{r}
+spliced_seu <- CreateSeuratObject(spliced) %>% 
+  NormalizeData() %>% 
+  ScaleData()
+```
+
+```{r}
+spliced_seu <- FindVariableGenes(spliced_seu, x.low.cutoff = 0.0125, y.cutoff = 0.475)
+```
+
+```{r}
+length(spliced_seu@var.genes)
+```
+
+```{r}
+spliced_seu <- RunPCA(spliced_seu, pcs.compute = 75)
+PCElbowPlot(spliced_seu, num.pc = 75)
+```
+
+```{r}
+spliced_seu <- FindClusters(spliced_seu, dims.use = 1:60, resolution = 1, print.output = FALSE)
+```
+
+```{r}
+PCAPlot(spliced_seu, pt.size = 0.5)
+```
+
+```{r}
+spliced_seu <- RunTSNE(spliced_seu, dims.use = 1:60)
+```
+
+```{r}
+TSNEPlot(spliced_seu, pt.size = 0.5)
+```
+
+```{r}
+clytia_umap <- umap(spliced_seu@dr$pca@cell.embeddings[,1:60], n_neighbors = 50, n_components = 2)
+```
+
+```{r}
+colnames(clytia_umap) <- as.character(1:2)
+rownames(clytia_umap) <- colnames(spliced)
+spliced_seu <- SetDimReduction(spliced_seu, reduction.type = "umap", slot = "cell.embeddings", new.data = clytia_umap)
+spliced_seu <- SetDimReduction(spliced_seu, reduction.type = "umap", slot = "key", new.data = "umap")
+```
+
+```{r}
+DimPlot(spliced_seu, reduction.use = "umap", pt.size = 0.5)
+```
+
+## Check marker genes
+```{r}
+FeaturePlot(spliced_seu, c("XLOC_008048", "XLOC_012650"), cols.use = viridis(256), pt.size = 0.5)
+```
+
+```{r}
+FeaturePlot(spliced_seu, c("XLOC_008048", "XLOC_012650"), cols.use = viridis(256), pt.size = 0.5, reduction.use = "umap")
+```
+
+## RNA velocity
+```{r}
+# Do RNA velocity
+cell_dist <- as.dist(1 - armaCor(t(spliced_seu@dr$pca@cell.embeddings), nthreads = 20))
+```
+
+```{r, message=FALSE, warning=FALSE}
+clytia_vel <- gene.relative.velocity.estimates(spliced, unspliced, cell.dist = cell_dist)
+```
+
+```{r}
+cluster_colors <- tibble(res.1 = as.character(0:27),
+                         color = hue_pal()(28))
+spliced_seu@meta.data <- spliced_seu@meta.data %>% 
+  left_join(cluster_colors, by = "res.1")
+colors_use <- setNames(ac(spliced_seu@meta.data$color, alpha = 0.5),
+                       colnames(spliced_seu@scale.data))
+```
+
+```{r}
+show1 <- show.velocity.on.embedding.cor(emb = spliced_seu@dr$tsne@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cell.colors = colors_use, cex = 0.5)
+```
+
+```{r}
+show.velocity.on.embedding.cor(emb = spliced_seu@dr$tsne@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 4, grid.n = 50, cell.colors = colors_use, cex = 0.5, cc = show1$cc)
+```
+
+```{r}
+show.velocity.on.embedding.cor(emb = spliced_seu@dr$umap@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 50, cell.colors = colors_use, cex = 0.5, cc = show1$cc)
+```
+
+```{r, fig.width=8, fig.height=4}
+gene.relative.velocity.estimates(spliced, unspliced, old.fit = clytia_vel, cell.colors = colors_use, cell.dist = cell_dist, show.gene = "XLOC_008048", do.par = TRUE, cell.emb = spliced_seu@dr$tsne@cell.embeddings)
+```
+
+```{r}
+saveRDS(spliced_seu, file = "spliced_seurat_object.Rds")
+saveRDS(spliced, file = "spliced_filtered.Rds")
+saveRDS(unspliced, file = "unspliced_filtered.Rds")
+saveRDS(clytia_vel, file = "clytia_velocity_ab_merged.Rds")
+saveRDS(show1, file = "clytia_show_ab_merged.Rds")
+saveRDS(cell_dist, file = "cell_dist.Rds")
+```
+

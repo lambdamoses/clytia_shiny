@@ -52,7 +52,10 @@ ui <- navbarPage("Clytiapedia",
               actionButton("report", "Download report")
             ),
             mainPanel(tags$p("This page is under construction. 
-                             You may use the Plot Data and the Marker Genes pages for now.")))),
+                             You may use the Plot Data and the Marker Genes pages
+                             to explore the Clytia dataset for now.
+                             When this page is done, you will be able to use this
+                             Shiny app to do basic scRNA-seq data analysis.")))),
    
    ## Plot data-----------------------------------------------------------
    tabPanel("Plot Data",
@@ -102,6 +105,7 @@ ui <- navbarPage("Clytiapedia",
    ## Show marker genes in each cluster---------------------
    tabPanel("Marker Genes",
             uiOutput("show_clust"),
+            hr(),
             dataTableOutput("show_markers"),
             value = "marker_genes"),
    ## Plot in situ results--------------------

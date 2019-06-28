@@ -1,0 +1,115 @@
+---
+title: "Choose genes for staining"
+author: "Lambda Moses"
+date: "11/7/2018"
+output: html_document
+---
+
+How shall we decide which genes to stain for in HCR, and hopefully later in STARmap? Jase said this can depend on the objective of choosing the genes. I want those genes to predict where genes not included in this panel are expressed in the tissue - as many other genes as possible. This is not simply gene expression inference like that from L1000 before; I'll take advantage of the known locations and treat this problem kind of like a missing data problem and try a Bayesian approach to allow for multimodal results. In other words, the landmark genes should better reflect spatial heterogeneity, but we need to infer which genes to choose without any existing spatial information. These genes should facilitate mapping cells to locations. Of course, if all genes chosen here are uniformly expressed, like actin and gapdh, then that won't really help with mapping cells to locations, since everywhere is equally likely if we only have information about such genes. The hard problem is that Valentine showed that spatially highly variable genes are mostly different from high variable genes inferred without location. So it's safer to get a panel that captures as much information of the transcriptome as possible. But what's cooler still is if I can infer missing locations with a not so good panel of genes. But with a good panel, I can compare infering gene expression from other genes independently of location and mapping cells to locations to give all genes a location. Perhaps a good panel can help, since if it captures most information of the transcriptome, then it should also capture most information of different cell types. Jase's objective is to find genes that identify cell types. Since location is often correlated with cell type, I expect genes selected for the two objectives to largely overlap. Here are the ideas we discussed:
+
+1. Use PCA or sparse PCA to identify genes with large loadings that explain most of the variance within the dataset. I'll use all genes rather than just the highly variable genes. I think I'll use some existing neuronet method to verify that this panel can help us to make good predictions on the genes.
+2. Simplest way: pick the top 2 marker genes of each cluster. I should also note that cell type classification is a hierarchy and where to cut the tree is quite arbitrary; the choice of marker genes should ideally reflect such a hierarchy. A more sophisticated method: Use diffusion map.
+3. See gene ontology based on the putative annotation, and pick some genes from each canonical pathway.
+
+How was the L1000 panel chosen? https://clue.io/connectopedia/identifying_1000_landmarks They did PCA and then kmeans to put the genes into tight cluster, and selected genes closest to the centroid of each cluster. They embedded genes, rather than cells/samples, in the lower dimensional space, and clustered genes rather than cells. What does it mean to cluster genes? The loadings are cells, so clusters mean some genes tend to be expressed together. That makes sense. But doesn't doing PCA with genes as loadings also get which genes are expressed together? PCA 
+
+```{r}
+library(Seurat)
+library(loomR)
+library(destiny)
+library(sparsepca)
+library(tidyverse)
+library(tightClust)
+library(rsvd)
+library(ClusterR)
+```
+
+```{r}
+clytia <- connect("clytia.loom", "r+")
+cell_attrs <- readRDS("clytia_cell_attrs.Rds")
+```
+
+```{r}
+# Try sparse pca
+clytia_spca <- spca(clytia[["layers/scale_data"]][,], center = FALSE, k = 75)
+```
+
+```{r}
+plot(clytia_spca$eigenvalues)
+```
+
+The eigenvalue means how much variance there is along the eigenvector. Looks like I'll only need the first 20 or so PCs to explain most variance here (I used 55 for tSNE, clustering, etc. just to be safe.) I can the top genes with large non-0 loadings, as the loadings are sparse. However, the absolute values of the loadings tend to be small, in the order of 1e-2 to 1e-3, since there was l1 regularization.
+
+```{r}
+dim1 <- 1
+dim2 <- 2
+plot(clytia_spca$scores[,dim1], clytia_spca$scores[,dim2], pch = 16, cex = 0.5, xlab = paste0("SPC", dim1), ylab = paste0("SPC", dim2), col = cell_attrs$cluster_colors)
+```
+
+Another question is: what to do with large negative loadings? How shall I interpret this? Here I see cells with negative coordinates in the embedding; it must mean that they're highly expressing the genes with very negative loadings in the SPC of interest.
+
+How do I choose the genes? What disturbing is that the total variance is 6609; the first 75 PCs only capture about 6% of the variance. So we'll lose a lot of information. It may take 5000 PCs to get 90% of variance. Say I stop somewhere when I get about 80%. Then I pick the gene with largest absolute value of loading in each PC; other genes with large loadings in that PC should be correlated anyway. See how this goes. But I can't do too many genes, so I have to risk losing information. 
+
+Regular PCA with all genes rather tha just the highly variable genes
+```{r}
+clytia_pca <- rpca(clytia[["layers/scale_data"]][,], center = FALSE, scale = FALSE)
+```
+
+```{r}
+ggscreeplot(clytia_pca, type = "cum")
+```
+
+```{r}
+sum(clytia_pca$eigvals[1:1000]) / clytia_pca$var
+```
+
+```{r}
+plot(clytia_pca$x[,1], clytia_pca$x[,2], pch = 16, cex = 0.5, xlab = "PC1", ylab = "PC2", col = cell_attrs$cluster_colors)
+```
+
+This looks different from what I got with just the highly variable genes.
+
+```{r}
+
+```
+
+Here try diffusion map with destiny
+```{r}
+clytia_dm <- DiffusionMap(data = clytia[["layers/scale_data"]][,], n_eigs = 75)
+```
+
+```{r}
+plot(clytia_dm@eigenvalues)
+```
+
+```{r}
+ggplot(clytia_dm, aes(DC1, DC2, color = cell_attrs$cluster)) +
+  geom_point(size = 0.5)
+```
+
+Cool. 
+
+Do the tight clustering on genes rather than cells. Note here that the features are cells, and samples are genes. I'm trying to find which genes are expressed together. Another concern: tight clustering may be too computationally intensive for this quite large dataset, and I need way more than 300 genes to cover 90% of variance. Anyway, L1000 was chosen a long time ago, still back in the microarray era. I don't have to do everything they did; I can use a different and more efficient robust clustering method. 
+```{r}
+# Run PCA to facilitate clustering
+gene_pca <- rpca(t(clytia[["layers/scale_data"]][,]), scale = FALSE, center = FALSE)
+```
+
+```{r}
+ggscreeplot(gene_pca, type = "cum")
+```
+
+```{r}
+sum(gene_pca$eigvals[1:5200]) / sum(gene_pca$eigvals)
+```
+
+It takes over 5000 PCs to cover 90% PC. That doesn't seem to help much, but at least it cuts the number of dimensions in half. But tight clustering might still be too computationally expensive. 
+```{r}
+system.time(gene_kmeans <- kmeans(gene_pca$x[,1:1000], centers = 10, iter.max = 20))
+```
+
+```{r}
+gene_tight_clusts <- tight.clust(gene_pca$x[,1:400], target = 20, k.min = 100)
+```
+
+Right, I have done gene clustering before, with MEGENA. How about simply using the hub genes from MEGENA? Or WGCNA? That's fancier than tight clustering back in 2006. 

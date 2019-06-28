@@ -1,0 +1,193 @@
+---
+title: "SNAIL probes manual"
+author: "Lambda Moses"
+date: "2/15/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(Rcpp)
+library(DECIPHER)
+library(plyranges)
+library(BSgenome)
+library(Rsamtools)
+library(systemPipeR)
+Rcpp::sourceCpp("./myTileSeqs.cpp")
+```
+
+```{r}
+annot <- read_gff("clytia_trinity_combined.gtf")
+```
+
+```{r}
+# Sort the ranges in minus strand the opposite way
+annot <- as.data.frame(annot)
+annot <- annot %>% 
+  mutate_if(is.factor, as.character) %>% 
+  mutate(start_sort = as.numeric(paste0(strand, start))) %>% 
+  arrange(seqnames, gene_name, transcript_id, start_sort) %>% 
+  dplyr::select(-start_sort) %>% 
+  as_granges()
+```
+
+```{r}
+annot %>% 
+  filter(strand == "-")
+```
+
+```{r}
+genes_use <- c("XLOC_017097", "XLOC_008048", "XLOC_000637", "XLOC_012650", "XLOC_019434")
+annot_sub <- annot %>% 
+  filter(gene_name %in% genes_use)
+```
+
+```{r}
+sub_seqs <- getSeq(FaFile("./clytia_genome.fa"), annot_sub)
+```
+
+```{r}
+# Splice the exons, for simplicity, only take the longest transcript
+spliced <- as.data.frame(mcols(annot_sub)) %>% 
+  select(gene_name, oId) %>% 
+  mutate(seqs = as.character(sub_seqs)) %>% 
+  group_by(gene_name, oId) %>% 
+  summarize(seqs = paste(seqs, collapse = "")) %>% 
+  mutate(len = str_length(seqs)) %>% 
+  top_n(1, len)
+```
+
+```{r}
+# Get ORF prediction
+spliced_seqs <- DNAStringSet(spliced$seqs)
+names(spliced_seqs) <- spliced$gene_name
+spliced_orf_gr <- predORF(spliced_seqs, type = "gr")
+```
+
+```{r}
+# Get ORF sequences
+spliced_orf <- getSeq(spliced_seqs, spliced_orf_gr)
+```
+I BLASTed this, and it worked.
+```{r}
+genes_init <- readDNAStringSet("./probes_manual.fasta")
+```
+
+```{r}
+tiles <- myTileSeqs(genes_use, as.character(genes_init), minLength = 40, maxLength = 46)
+```
+
+```{r}
+tiles <- tiles %>% 
+  mutate_if(is.factor, as.character) %>% 
+  mutate_if(is.numeric, as.integer)
+```
+
+```{r}
+probes <- DesignProbes(tiles, minLength = 40, maxLength = 46, hybTemp = 40, Na = 0.33,
+                       FA = 10, target = "Other", P = 1e-7)
+```
+
+The algorithm from DECIPHER says no probe satisfies the constraint for XLOC_008048. Well, then I'll try doing it with this gene by itself.
+```{r}
+probes_8048 <- DesignProbes(tiles, identifier = "XLOC_008048", minLength = 40, 
+                            maxLength = 46, hybTemp = 40, Na = 0.33,
+                            FA = 10, P = 1e-7, target = "Other",
+                            minEfficiency = 0)
+```
+
+The supplement also said that the two halves of the probe must match.
+```{r}
+# Calculate melting temperature, assume that there're 
+Tm <- function(s) {
+  # Letter frequency
+  s <- strsplit(s, "")[[1]]
+  freqs <- table(s)
+  if (!"G" %in% names(freqs)) {
+    freqs["G"] <- 0
+  }
+  if (!"C" %in% names(freqs)) {
+    freqs["C"] <- 0
+  }
+  64.9 + 41 * (freqs["G"] + freqs["C"] - 16.4) / length(s)
+}
+```
+
+I'll split the top candidate probes into 20-25 bp halves, compute their Tm, and pick the split with the best match of Tm.
+
+```{r}
+split_probe <- function(probe) {
+  pt1 <- str_sub(probe, 1, 20:25)
+  pt2 <- str_sub(probe, 21:26)
+  tibble(part1 = pt1,
+         part2 = pt2)
+}
+```
+
+```{r}
+probes$probe <- probes$probe[,1]
+```
+
+```{r}
+probes <- probes %>% 
+  select(identifier, probe) %>% 
+  mutate(splits = lapply(probe, split_probe)) %>% 
+  unnest() %>% 
+  mutate(Tm1 = sapply(part1, Tm), 
+         Tm2 = sapply(part2, Tm),
+         Tm_diff = abs(Tm1 - Tm2))
+```
+
+```{r}
+probes <- probes %>% 
+  group_by(identifier) %>% 
+  top_n(4, -Tm_diff)
+```
+
+```{r}
+probes
+```
+
+What to do with XLOC_008048? I guess I'll calculate splits and Tms for all possible probes for that gene and filter.
+```{r}
+probes8048 <- tiles %>% 
+  select(identifier = id, probe = target_site) %>% 
+  filter(identifier == "XLOC_008048") %>% 
+  mutate(splits = map(probe, split_probe)) %>% 
+  unnest() %>% 
+  mutate(Tm1 = sapply(part1, Tm), 
+         Tm2 = sapply(part2, Tm),
+         Tm_diff = abs(Tm1 - Tm2))
+```
+
+```{r}
+probes8048 %>% 
+  filter(Tm2 < 47) %>% 
+  arrange(Tm_diff)
+```
+
+I see why no suitable probes can be found for this gene. The melting temperature is way too high for hybridization at 40 degrees. Let me check alphabet frequency
+
+```{r}
+freqs <- alphabetFrequency(genes_init)
+rownames(freqs) <- names(genes_init)
+freqs
+```
+
+```{r}
+# Calculate GC content
+(freqs[,"C"] + freqs[,"G"]) / rowSums(freqs)
+```
+
+XLOC_008048 has much higher GC content than the other genes used here, so no wonder the melting temperature is so high.
+
+```{r}
+# Try OligoMiner
+names(spliced_orf) <- names(spliced_seqs)
+writeXStringSet(spliced_orf, "./cds_sub.fasta")
+```
+

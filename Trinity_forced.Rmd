@@ -17,26 +17,93 @@ library(viridis)
 library(scales)
 library(foreach)
 library(doParallel)
+library(plotly)
+library(doubletFinder)
 registerDoParallel(cores = 6)
 ```
 
 ```{r}
 c(spliced, unspliced, ambiguous) %<-%
-  read.loom.matrices("/home/jgehring/scRNAseq/clytia/20180806/clytia_big_cDNAs_all_transcripts_forced/possorted_genome_bam_PP9W0.loom")
+  read.loom.matrices("/home/jgehring/scRNAseq/clytia/20180806/clytia_final_20181115/velocyto/clytia_final_20181115.loom")
 ```
-That creates a list of sparse matrices of spliced, unspliced, and ambiguous counts.
+That creates a list of sparse matrices of spliced, unspliced, and ambiguous counts. There're duplicate rows in the matrices. I should aggregate first. 
+```{r}
+anyDuplicated(rownames(spliced))
+anyDuplicated(rownames(unspliced))
+anyDuplicated(rownames(ambiguous))
+```
+```{r}
+rownames(spliced)[1:50]
+```
+See, there're duplicates
+```{r}
+all.equal(spliced[2,], spliced[3,])
+all.equal(unspliced[2,], unspliced[3,])
+all.equal(ambiguous[2,], ambiguous[3,])
+```
+Those duplicate rows are not the same; this might mean alternative splicing of the same genes. 
+```{r}
+clytia_all <- connect("/home/jgehring/scRNAseq/clytia/20180806/clytia_final_20181115/velocyto/clytia_final_20181115.loom")
+clytia_mat <- t(clytia_all[["matrix"]][,])
+clytia_mat <- as(clytia_mat, "dgCMatrix")
+```
+What proportion of reads are unspliced?
+```{r}
+sum(unspliced@x) / sum(clytia_mat@x)
+```
+Almost 14%.
+```{r}
+# Correct gene names
+anyDuplicated(clytia_all[["row_attrs/Accession"]][])
+```
+There're no duplicated in the accession, so I'll use accession for my analysis to honor alternative splicing. Another burning question: Shall I use only spliced data or all data? Spliced data better indicates the current biological state, or the state of a nearer future since proteins do the real jobs after all. Unspliced data better indicates the biological state of a further future. If the current state is what I'm interested in (I have RNA velocity for a future state), and in the RNA velocity analysis, I'm interested in where the cells are going compared to the current state, then I'll use the spliced data.
+```{r}
+# Convert between gene and accesssion
+gene_accession <- tibble(gene = clytia_all[["row_attrs/Gene"]][],
+                         accession = clytia_all[["row_attrs/Accession"]][])
+```
 
 ```{r}
+rownames(spliced) <- rownames(unspliced) <- rownames(ambiguous) <- 
+  clytia_all[["row_attrs/Accession"]][]
 # Get the PCA, TSNE, UMAP stuff
 clytia <- CreateSeuratObject(spliced, min.cells = 3, min.genes = 1) %>% 
   NormalizeData() %>% 
-  ScaleData(num.cores = 10)
+  ScaleData(num.cores = 10, do.par = TRUE)
 clytia <- clytia %>% 
   FindVariableGenes(y.cutoff = 0.475, x.low.cutoff = 0.0125)
 ```
 
+How many HVG?
+```{r}
+length(clytia@var.genes)
+```
+
 ```{r}
 VlnPlot(clytia, c("nGene", "nUMI"), group.by = "orig.ident")
+```
+
+Are there doublets?
+```{r}
+clytia <- doubletFinder(clytia, expected.doublets = 100)
+```
+```{r}
+hist(clytia@meta.data$pANN, breaks = 100)
+```
+
+This histogram looks quite different from what I've seen in mouse brain datasets. It doesn't have a prominent peak with pANN greater than about 0.6. 
+```{r}
+clytia@meta.data %>% 
+  group_by(pANNPredictions) %>% 
+  summarize(min_pAnn = min(pANN))
+```
+
+```{r}
+TSNEPlot(clytia, group.by = "pANNPredictions", pt.size = 0.5)
+```
+
+```{r}
+clytia <- FilterCells(clytia, "nUMI", high.thresholds = 3e4)
 ```
 
 ## Dimension reductions
@@ -45,24 +112,45 @@ clytia <- clytia %>%
   RunPCA(pcs.compute = 75, do.print = FALSE)
 PCElbowPlot(clytia, num.pc = 75)
 ```
+
+It was said that the first PC corresponds to sequencing depth. Is this really the case?
+```{r}
+FeaturePlot(clytia, "nUMI", reduction.use = "pca", cols.use = viridis(256))
+```
+
+No, it doesn't seem so, so I'll continue to use PC1.
+
+Burning question: How many PCs to use? It was said that PCA is denoising; using too many PCs will include more noise, while using too few will lose too much signal. A way built into Seurat to determine the number of PCs is JackStraw, which does permutation to estimate a null distribution to estimate p-values of PCs.
+
+```{r}
+clytia <- JackStraw(clytia, do.par = TRUE, num.pc = 75)
+```
+
+```{r, fig.width = 6, fig.height = 10}
+JackStrawPlot(clytia, PCs = 1:40, nCol = 5)
+```
+
+OK, if I just use the p-values, then I'd better stop at around 30 PCs. 
 ```{r}
 # Clustering
 clytia <- clytia %>% 
-  FindClusters(genes.use = clytia@var.genes, dims.use = 1:60, resolution = 1)
+  FindClusters(genes.use = clytia@var.genes, dims.use = 1:34, resolution = 1)
 ```
 
 ```{r}
 PCAPlot(clytia, pt.size = 0.5)
 ```
 
+It doesn't look too different from when I used 60 PCs.
 ```{r}
 clytia <- clytia %>% 
-  RunTSNE(dims.use = 1:60)
+  RunTSNE(dims.use = 1:34)
+clytia <- SetAllIdent(clytia, "res.1")
 TSNEPlot(clytia, pt.size = 0.5)
 ```
 
 ```{r}
-clytia_umap <- umap(clytia@dr$pca@cell.embeddings[,1:60], n_neighbors = 35, n_components = 2)
+clytia_umap <- umap(clytia@dr$pca@cell.embeddings[,1:34], n_neighbors = 50, n_components = 2)
 ```
 
 ```{r}
@@ -72,12 +160,23 @@ clytia <- SetDimReduction(clytia, reduction.type = "umap", slot = "key", new.dat
 ```
 
 ```{r}
-DimPlot(clytia, reduction.use = "umap", pt.size = 0.5, dim.1 = 1, dim.2 = 2)
+DimPlot(clytia, reduction.use = "umap", pt.size = 0.5, 
+                 dim.1 = 1, dim.2 = 2)
+```
+
+Again, I get that small and very different cluster.
+```{r}
+gene_accession <- gene_accession %>% 
+  filter(accession %in% rownames(clytia@scale.data))
+gene_accession %>% 
+  filter(gene == "XLOC_030664")
 ```
 
 ```{r}
-FeaturePlot(clytia, "XLOC_008048", cols.use = viridis(256), pt.size = 0.5, reduction.use = "tsne")
+FeaturePlot(clytia, "XLOC_051264", cols.use = viridis(256), pt.size = 0.5, reduction.use = "tsne")
 ```
+
+That's one of the pan neuronal genes. Based on Jase's candidate genes, it seems that clusters 23 and 26 in my analysis (with resolution 1.6) are the neurons. 
 
 ## Clustering with different resolutions
 ```{r}
@@ -86,7 +185,7 @@ clytia <- clytia %>%
 ```
 
 ```{r}
-TSNEPlot(clytia, pt.size = 0.5, group.by = "res.1")
+TSNEPlot(clytia, pt.size = 0.5, group.by = "res.0.6")
 ```
 
 ## Marker genes for each cluster
@@ -113,12 +212,42 @@ markers_auc <- foreach(i = seq(0.6, 1.6, 0.2)) %dopar% {
                  test.use = "roc")
 }
 ```
+After filtering, which gene still has more than 1 transcripts?
+```{r}
+length(which(duplicated(gene_accession$gene)))
+```
+OK, I was right by using accession. That's not a negligible number.
+```{r}
+markers[[3]] %>% 
+  filter(cluster == 19)
+```
 
 ```{r}
-markers_auc[[3]]
+FeaturePlot(clytia, "XLOC_007911", cols.use = viridis(256))
 ```
 
 I take the p-value with a grain of salt, but it does seem that the Wilcoxon rank sum test gives some decent results. I did get some really good marker genes. But I'll impose more stringent criteria tto further narrow down the list of genes:
+
+Another cool thing: see which transcripts are markers for different clusters
+```{r}
+markers[[3]] %>% 
+  rename(accession = gene) %>% 
+  left_join(gene_accession) %>% 
+  dplyr::select(accession, gene) %>% 
+  distinct() %>% 
+  group_by(gene) %>% 
+  count() %>% 
+  arrange(desc(n))
+```
+
+```{r}
+gene_accession %>% 
+  semi_join(markers[[3]][markers[[3]]$p_val_adj < 0.05,], by = c("accession"= "gene")) %>% 
+  group_by(gene) %>% 
+  count() %>% arrange(desc(n))
+```
+
+Nevermind, I didn't find a gene with transcripts that are markers for different clusters. All the marker genes here only have one transcript.
 
 1. The marker gene must not be expressed at more than a certain level in a certain number of cells in other clusters, especially large clusters (another tiny cluster also highly expressing this gene might be fine). This is to reduce background. This number depends on the size of the cluster of interest. Well, perhaps I shouldn't bring this too far; double staining can help. A combination of markers must be more helpful to identify cell types, especially for rare cell types. Well, since there aren't that many clusters, I can simply hand pick genes after inspection of plots, but I think on the long run, I should automate this since this analysis may be run several times.
 2. It's fine if at a resolution, there's no marker gene for a cluster; then I should look at a coarser resolution to identify markers for a broader cell type.
@@ -127,9 +256,9 @@ I take the p-value with a grain of salt, but it does seem that the Wilcoxon rank
 ```{r}
 # Function to plot the top few marker genes in each cluster
 plot_top_markers <- function(cluster = 0, nCol = 2, nGenes = 6) {
-  cond <- clytia_markers$cluster == cluster & clytia_markers$p_val < 0.05
+  cond <- markers$cluster == cluster & markers$p_val < 0.05
   if (sum(cond) < nGenes) nGenes <- sum(cond)
-  FeaturePlot(clytia, clytia_markers[clytia_markers$cluster == cluster,
+  FeaturePlot(clytia, markers[markers$cluster == cluster,
                                      "gene"][1:nGenes],
             cols.use = viridis(256), 
             pt.size = 0.5, nCol = nCol, dark.theme = TRUE)
@@ -138,7 +267,7 @@ plot_top_markers <- function(cluster = 0, nCol = 2, nGenes = 6) {
 
 Plot top markers for cluster 0, which seems pretty large and diffused
 ```{r,fig.height=8, fig.width=6, fig.align='center'}
-for (i in 0:19) {
+for (i in 0:26) {
   plot_top_markers(i)
 }
 ```
@@ -156,8 +285,8 @@ clytia_vel <- gene.relative.velocity.estimates(spliced, unspliced, cell.dist = c
 ```
 
 ```{r}
-cluster_colors <- tibble(res.1 = as.character(0:19),
-                         color = hue_pal()(20))
+cluster_colors <- tibble(res.1 = as.character(0:26),
+                         color = hue_pal()(27))
 clytia@meta.data <- clytia@meta.data %>% 
   left_join(cluster_colors, by = "res.1")
 colors_use <- setNames(ac(clytia@meta.data$color, alpha = 0.5),
@@ -165,25 +294,35 @@ colors_use <- setNames(ac(clytia@meta.data$color, alpha = 0.5),
 ```
 
 ```{r}
-show1 <- show.velocity.on.embedding.cor(emb = clytia@dr$tsne@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cell.colors = colors_use)
+show1 <- show.velocity.on.embedding.cor(emb = clytia@dr$tsne@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 5, grid.n = 40, cell.colors = colors_use, cex = 0.5, cc = show1$cc)
 ```
 
+I see some big arrows on the neurons. 
 ```{r}
-show.velocity.on.embedding.cor(emb = clytia@dr$pca@cell.embeddings[,1:2], vel = clytia_vel, cell.colors = colors_use, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cc = show1$cc)
+show.velocity.on.embedding.cor(emb = clytia@dr$pca@cell.embeddings[,1:2], vel = clytia_vel, cell.colors = colors_use, show.grid.flow = TRUE, arrow.scale = 5, grid.n = 40, cc = show1$cc)
 ```
 
 That's an interesting pattern. The annoying part is that the velocyto package doesn't let us change the point character. Because of the black outline of the points, if I make the points smaller, they will look dark. Since velocyto doesn't let me change the color of arrows, I can't do a dark theme, since that will make it hard to see the arrows.
 ```{r}
-show.velocity.on.embedding.cor(emb = clytia@dr$umap@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 40, cc = show1$cc)
+show.velocity.on.embedding.cor(emb = clytia@dr$umap@cell.embeddings, vel = clytia_vel, show.grid.flow = TRUE, arrow.scale = 3, grid.n = 50, cc = show1$cc, cell.colors = colors_use, cex = 0.5)
 ```
 
 ```{r}
 show.velocity.on.embedding.eu(emb = clytia@dr$tsne@cell.embeddings, vel = clytia_vel, arrow.scale = 3, show.cell.trajectories = TRUE, nPcs = 50)
 ```
 
+```{r}
+gene_accession %>% 
+  filter(gene == "XLOC_044126")
+```
+
+```{r}
+FeaturePlot(clytia, "XLOC_075159", cols.use = viridis(256), pt.size = 0.2, do.hover = TRUE) %>% toWebGL()
+```
+
 ## Save results
 ```{r}
-clytia_loom <- Convert(from = clytia, to = "loom", file = "clytia.loom")
+save(clytia, file = "clytia_final.RData")
 ```
 
 ```{r}
@@ -216,15 +355,11 @@ clytia_gene_names <- clytia_loom[["row_attrs/gene_names"]][]
 
 ```{r}
 # Save results
-saveRDS(clytia_vel, file = "clytia_velocity.Rds")
-saveRDS(show1, file = "clytia_show.Rds")
+saveRDS(clytia_vel, file = "clytia_velocity_final.Rds")
+saveRDS(show1, file = "clytia_show_final.Rds")
 saveRDS(clytia_cell_attrs, file = "clytia_cell_attrs.Rds")
 saveRDS(clytia_gene_names, file = "clytia_gene_names.Rds")
 write_csv(clytia_markers, "clytia_cluster_markers.csv")
-```
-
-```{r}
-clytia_loom$close_all()
 ```
 
 ```{r}

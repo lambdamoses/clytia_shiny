@@ -1,0 +1,24 @@
+---
+title: "Annotations"
+author: "Lambda Moses"
+date: "11/26/2018"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(jsonlite)
+```
+
+```{r}
+annots <- stream_in(file("Clytia_hemisphaerica.denovium_annotations.json.gz"))
+```
+Unfortunately, I don't know how to interpret this.
+```{r}
+names(annots)
+```
+
+```{r}
+length(annots$symbol[[1]])
+```
+

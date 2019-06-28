@@ -1,0 +1,236 @@
+---
+title: "Designing SNAIL probes for STARmap"
+author: "Lambda Moses"
+date: "2/4/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Biostrings)
+library(GenomicFeatures)
+library(BSgenome)
+library(plyranges)
+library(Rsamtools)
+library(DECIPHER)
+library(tidyverse)
+library(parallel)
+```
+
+```{r}
+# There're only exons here
+annot <- read_gff("clytia_trinity_combined.gtf")
+```
+
+This is the only GFF/GTF file I found that has CDS annotations.
+```{r}
+cr_trinity <- read_gff("CR_Trinity_cdhit_95_sort.gff3")
+```
+
+```{r}
+# Only keep the CDS
+cr_trinity <- cr_trinity %>% 
+  filter(type == "CDS")
+```
+
+I want the CDS, since I don't want to probe that targets an UTR. I can do so by finding overlaps between the CDS annotation and the exons. The reason why I do such a join is that I want the XLOC gene IDs as used in MARIMBA.
+```{r, message=FALSE}
+cds_gr <- join_overlap_intersect_directed(annot, cr_trinity) %>% unique()
+cds_gr
+```
+
+I can simply splice these sequences to get the full coding part of the transcripts. For genes on the plus strand, I can simply concatenate the sequences to get the right protein after translation. For sequenes on the minus strand, I need to sort the exons in the opposite direction and concatenate. 
+```{r}
+# Sort the ranges in minus strand the opposite way
+cds_gr <- as.data.frame(cds_gr)
+cds_gr <- cds_gr %>% 
+  mutate_if(is.factor, as.character) %>% 
+  mutate(start_sort = as.numeric(paste0(strand, start))) %>% 
+  arrange(seqnames, gene_id.x, transcript_id.x, start_sort) %>% 
+  dplyr::select(-start_sort) %>% 
+  as_granges()
+```
+
+```{r}
+# Check for correct sorting
+cds_gr %>% 
+  filter(strand == "+")
+```
+
+```{r}
+cds_gr %>% 
+  filter(strand == "-")
+```
+
+```{r}
+# Index the transcriptome fa file
+indexFa("./clytia_genome.fa")
+```
+Then I can get the exons from the genome
+```{r}
+cds_seqs <- getSeq(FaFile("./clytia_genome.fa"), cds_gr)
+cds_seqs
+```
+
+```{r}
+# Check that minus strand exons can be concatenated properly
+inds <- cds_gr$transcript_id.x == "TCONS_00000139"
+paste(as.character(cds_seqs[inds]), collapse = "")
+```
+
+I just blasted this on MARIMBA, and it fully matches the right entry in the transcripome and proteome. So now I'll concatenate the sequences grouped by transcript. OK, plyranges doesn't do all that I want for Tidygenomics, so I still have to conovert to tibble to do the splicing.
+
+Many genes have more than 1 transcript isoforms, so what to do? Shall I take the intersection? But wouldn't differential transcript usage be interesting? Here, I save a copy that has the different isoforms.
+```{r}
+cds_annot <- as.data.frame(mcols(cds_gr)) %>% 
+  select(gene_id.x, transcript_id.x) %>% 
+  rename(gene_id = gene_id.x, transcript_id = transcript_id.x) %>% 
+  mutate(seqs = as.character(cds_seqs)) %>% 
+  group_by(gene_id, transcript_id) %>% 
+  summarize(seqs = paste(seqs, collapse = ""))
+```
+
+```{r}
+# Remove duplicate isoforms that have identical CDS sequences
+cds_annot <- cds_annot %>% 
+  group_by(seqs) %>% 
+  mutate(seq_occurance = row_number(transcript_id)) %>% 
+  filter(seq_occurance == 1) %>% 
+  select(-seq_occurance)
+```
+
+```{r}
+cds_annot$seqs[100]
+```
+
+```{r}
+cds_seqs_concat <- DNAStringSet(cds_annot$seqs)
+names(cds_seqs_concat) <- cds_annot$transcript_id
+# Save the spliced CDS
+writeXStringSet(cds_seqs_concat, "./clytia_cds_spliced.fasta", compress = TRUE)
+# Save the gene and transcript ID table
+cds_annot %>% 
+  ungroup() %>% 
+  select(-seqs) %>% 
+  write_csv("./clytia_tr2g.csv")
+```
+
+Also save a copy with only the intersection of all isoforms of a gene to stain for all isoforms of the gene.
+```{r}
+cds_annot %>% 
+  group_by(gene_id) %>% 
+  count() %>% 
+  arrange(desc(n))
+```
+Some genes have so many isoforms. Sounds crazy.
+
+```{r}
+cds_agg <- cds_gr %>% 
+  select(gene_id.x, transcript_id.x) %>% 
+  as.data.frame() %>% 
+  rename(gene_id = gene_id.x, transcript_id = transcript_id.x)
+```
+
+```{r}
+cds_agg <- cds_agg %>% 
+  group_by(gene_id, transcript_id) %>% 
+  nest() %>% 
+  mutate(data = mclapply(data, as_granges, mc.cores = 10)) %>% 
+  group_by(gene_id) %>% 
+  nest()
+```
+
+```{r}
+cds_agg <- cds_agg %>% 
+  mutate(gr_intersect = mclapply(data, function(x) {
+      as.data.frame(Reduce(function(y,z) {
+    unique(join_overlap_intersect(y,z))
+  }, x$data))
+    }, mc.cores = 3)) %>% 
+  select(-data) %>% 
+  unnest(gr_intersect)
+```
+
+```{r}
+# Sort the ranges in minus strand the opposite way
+cds_agg <- as.data.frame(cds_agg)
+cds_agg <- cds_agg %>% 
+  mutate_if(is.factor, as.character) %>% 
+  mutate(start_sort = as.numeric(paste0(strand, start))) %>% 
+  arrange(seqnames, gene_id, start_sort) %>% 
+  dplyr::select(-start_sort) %>% 
+  as_granges()
+```
+
+```{r}
+# Get the sequences common to all isoforms
+cds_intersect <- getSeq(FaFile("./clytia_genome.fa"), cds_agg)
+```
+
+```{r}
+# Check that minus strand exons can be concatenated properly
+inds <- cds_agg$gene_id == "XLOC_000112"
+paste(as.character(cds_intersect[inds]), collapse = "")
+```
+
+```{r}
+# Splice
+cds_annot_agg <- as.data.frame(mcols(cds_agg)) %>% 
+  select(gene_id) %>% 
+  mutate(seqs = as.character(cds_intersect)) %>% 
+  group_by(gene_id) %>% 
+  summarize(seqs = paste(seqs, collapse = "")) %>% 
+  distinct()
+```
+
+```{r}
+# Save sequence
+cds_intersect_concat <- DNAStringSet(cds_annot_agg$seqs)
+names(cds_intersect_concat) <- cds_annot_agg$gene_id
+writeXStringSet(cds_intersect_concat, filepath = "clytia_cds_intersect.fasta", compress = TRUE)
+```
+
+Now I can design specific probes. In order for the probes to be specific to the gene, I'll compare it to all CDS here. Only the CDS, since most mRNAs are spliced and from RNA-seq data, we have more reads in the CDS than the UTRs.
+```{r}
+cds_intersect_concat <- readDNAStringSet("./clytia_cds_intersect.fasta")
+# Remove entries with width less than maxLength
+cds_intersect_concat <- cds_intersect_concat[width(cds_intersect_concat) >= 27]
+# Remove entries with letters other than ACTG
+lf <- alphabetFrequency(cds_intersect_concat)
+ind <- rowSums(lf[,5:18]) > 0
+cds_intersect_concat <- cds_intersect_concat[!ind]
+```
+
+Note that the function `myTileSeqs` is a simplified version of DECIPHER's `TileSeqs`. I removed some bells and whistles used when a group of sequences share an ID, to speed up this function severa
+
+```{r}
+Rcpp::sourceCpp("./myTileSeqs.cpp")
+```
+
+```{r}
+# Tile sequences
+tiles <- myTileSeqs(names(cds_intersect_concat),
+                    as.character(cds_intersect_concat)) %>% 
+  mutate_if(is.factor, as.character) %>% 
+  mutate_if(is.numeric, as.integer) %>% 
+  arrange(id)
+```
+
+```{r}
+# Get transcript ID for the gene ID
+genes_use <- c("XLOC_017097", "XLOC_008048", "XLOC_000637", "XLOC_012650", 
+               "XLOC_019434")
+```
+
+```{r}
+tiles_sub <- tiles %>% 
+  filter(id %in% genes_use)
+probe1 <- DesignProbes(tiles_sub, identifier = genes_use[-4], 
+                       minLength = 20, maxLength = 23,
+                       hybTemp = 40, Na = 0.3, FA = 10)
+```
+
+STARmap needs 2 probes separated by 2nt on the transcriptome, with melting temperature within 2 degrees.

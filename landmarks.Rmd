@@ -1,0 +1,90 @@
+---
+title: "WGCNA"
+author: "Lambda Moses"
+date: "11/10/2018"
+output: html_document
+---
+
+```{r}
+library(WGCNA)
+library(loomR)
+library(Seurat)
+library(foreach)
+library(doParallel)
+library(tidyverse)
+registerDoParallel(cores = 88)
+```
+
+```{r}
+clytia <- connect("clytia.loom", "r+")
+mat <- clytia[["matrix"]][,]
+gene_names <- readRDS("clytia_gene_names.Rds")
+colnames(mat) <- gene_names
+```
+
+```{r}
+sft <- pickSoftThreshold(mat)
+```
+
+```{r}
+powers <- c(seq(1, 10, by = 1), seq(12, 20, by = 2))
+par(mfrow = c(1,2));
+cex1 = 0.9;
+# Scale-free topology fit index as a function of the soft-thresholding power
+plot(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+     xlab="Soft Threshold (power)",ylab="Scale Free Topology Model Fit,signed R^2",type="n",
+    main = paste("Scale independence"));
+text(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+    labels=powers,cex=cex1,col="red");
+# this line corresponds to using an R^2 cut-off of h
+abline(h=0.90,col="red")
+# Mean connectivity as a function of the soft-thresholding power
+plot(sft$fitIndices[,1], sft$fitIndices[,5],
+    xlab="Soft Threshold (power)",ylab="Mean Connectivity", type="n",
+    main = paste("Mean connectivity"))
+text(sft$fitIndices[,1], sft$fitIndices[,5], labels=powers, cex=cex1,col="red")
+```
+
+```{r}
+net <- blockwiseModules(mat, power = 3, maxBlockSize = 20000, verbose = 3, nThreads = 88, minModuleSize = 10, deepSplit = 4)
+```
+
+```{r}
+plotDendroAndColors(net$dendrograms[[1]], net$colors, dendroLabels = FALSE)
+```
+
+## Genes to identify clusters
+I think this is the easier part than identifying a panel of landmark genes that captures 80% of information of the transcriptome. Perhaps I should start here, and work on the L1000-like panel later, since while we can quantify about 1000 genes with STARmap, we can't do that with HCR. Here I'll do clustering at different resolutions and then use DESeq2 for differential expression. 
+
+### Clustering at different resolutions
+```{r}
+FindClusters(clytia, resolution = 0.6)
+```
+```{r}
+FindClusters(clytia, resolution = 0.8)
+```
+
+```{r}
+FindClusters(clytia, resolution = 1.2)
+```
+
+### Pan-neuronal genes
+```{r}
+annots <- read_csv("BLASTedGenesMasterList.csv")
+```
+
+```{r}
+annots %>% 
+  filter(str_detect(`Marker_for_Cluster(s) (Rank)`, "^3 \\("))
+```
+
+```{r}
+annots %>% 
+  filter(str_detect(BLASTannotation, regex("neur", ignore_case = TRUE)))
+```
+
+```{r}
+annots %>% 
+  filter(str_detect(BLASTannotation, regex("synap", ignore_case = TRUE)))
+```
+

@@ -1,0 +1,102 @@
+---
+title: "Choosing marker genes for STARmap"
+author: "Lambda Moses"
+date: "1/23/2019"
+output: html_document
+---
+
+In this notebook, I'll use iterated WGCNA to find genes to use for STARmap. 
+```{r}
+library(WGCNA)
+library(data.table)
+library(Matrix)
+library(Seurat)
+library(tidyverse)
+```
+
+```{r}
+# Set multithreading
+allowWGCNAThreads(nThreads = 20)
+```
+
+```{r}
+path2mat <- "/home/jgehring/scRNAseq/clytia/20181229/jelly3_aggr_20181231/outs/filtered_feature_bc_matrix"
+bcs <- fread(paste(path2mat, "barcodes.tsv.gz", sep = "/"), header = FALSE)
+features <- fread(paste(path2mat, "features.tsv.gz", sep = "/"), header = FALSE)
+exp_mat <- readMM(paste(path2mat, "matrix.mtx.gz", sep = "/"))
+rownames(exp_mat) <- features$V1
+colnames(exp_mat) <- bcs$V1
+```
+I suppose that's the right matrix, but just to do a sanity check:
+```{r}
+seu <- CreateSeuratObject(exp_mat, min.cells = 3) %>% 
+  NormalizeData() %>% 
+  ScaleData()
+```
+
+```{r}
+seu <- FindVariableGenes(seu, x.low.cutoff = 0.025, y.cutoff = 0.45)
+```
+
+```{r}
+length(seu@var.genes)
+```
+
+```{r}
+seu <- RunPCA(seu, pcs.compute = 75, do.print = FALSE)
+```
+
+```{r}
+PCElbowPlot(seu, num.pc = 75)
+```
+
+```{r}
+PCAPlot(seu, pt.size = 0.5)
+```
+
+OK, that looks fine, so I can continue to use this matrix.
+
+## WGCNA
+```{r}
+soft_th <- pickSoftThreshold(seu@raw.data)
+```
+
+```{r}
+# Plot the results:
+powers <- c(seq(1, 10, by = 1), seq(12, 20, by = 2))
+sizeGrWindow(9, 5)
+par(mfrow = c(1,2));
+cex1 = 0.9;
+# Scale-free topology fit index as a function of the soft-thresholding power
+plot(soft_th$fitIndices[,1], -sign(soft_th$fitIndices[,3])*soft_th$fitIndices[,2],
+     xlab="Soft Threshold (power)",ylab="Scale Free Topology Model Fit,signed R^2",type="n",
+    main = paste("Scale independence"));
+text(soft_th$fitIndices[,1], -sign(soft_th$fitIndices[,3])*soft_th$fitIndices[,2],
+    labels=powers,cex=cex1,col="red");
+# this line corresponds to using an R^2 cut-off of h
+abline(h=0.90,col="red")
+# Mean connectivity as a function of the soft-thresholding power
+plot(soft_th$fitIndices[,1], soft_th$fitIndices[,5],
+    xlab="Soft Threshold (power)",ylab="Mean Connectivity", type="n",
+    main = paste("Mean connectivity"))
+text(soft_th$fitIndices[,1], soft_th$fitIndices[,5], labels=powers, cex=cex1,col="red")
+```
+
+It seems that at power 10, we have scale independence. I'll choose 10 for the power. Let me try the default parameters first.
+```{r}
+net <- blockwiseModules(seu@raw.data, power = 10, maxBlockSize = 15000)
+```
+
+```{r}
+mergedColors = labels2colors(net$colors)
+plotDendroAndColors(net$dendrograms[[1]], mergedColors[net$blockGenes[[1]]],
+                  "Module colors",
+                  dendroLabels = FALSE, hang = 0.03,
+                  addGuide = TRUE, guideHang = 0.05)
+```
+
+How many eigengenes are there?
+```{r}
+
+```
+
